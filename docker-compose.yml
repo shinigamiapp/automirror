@@ -29,11 +29,13 @@ services:
         condition: service_healthy
     ports:
       - "3000:3000"
-    volumes:
-      - ./data:/app/data
     environment:
       - NODE_ENV=production
-      - DATABASE_PATH=/app/data/scraper.db
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
+      - MYSQL_USER=${MYSQL_USER:-scraper}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
       - SCRAPER_BASE_URL=${SCRAPER_BASE_URL}
       - UPLOADER_BASE_URL=${UPLOADER_BASE_URL}
       - BACKEND_API_URL=${BACKEND_API_URL}
@@ -46,12 +48,6 @@ services:
       - NOVU_SUBSCRIBER_ID=${NOVU_SUBSCRIBER_ID}
       - DASHBOARD_URL=${DASHBOARD_URL}
       - API_URL=${API_URL}
-      # Reserved for future MySQL runtime support
-      - MYSQL_HOST=${MYSQL_HOST:-mysql}
-      - MYSQL_PORT=${MYSQL_PORT:-3306}
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
-      - MYSQL_USER=${MYSQL_USER:-scraper}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]

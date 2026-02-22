@@ -1,0 +1,17 @@
+node_modules
+dist
+data
+.env
+.env.local
+.env.*.local
+.git
+.gitignore
+plans
+upstream_docs
+docs
+tests
+coverage
+*.db
+*.db-shm
+*.db-wal
+*.md

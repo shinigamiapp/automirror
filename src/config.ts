@@ -4,8 +4,12 @@ export const CONFIG = {
   HOST: process.env.HOST || '0.0.0.0',
   LOG_LEVEL: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
 
-  // Database
-  DATABASE_PATH: process.env.DATABASE_PATH || './data/scraper.db',
+  // MySQL Database
+  MYSQL_HOST: process.env.MYSQL_HOST || 'localhost',
+  MYSQL_PORT: parseInt(process.env.MYSQL_PORT || '3306', 10),
+  MYSQL_DATABASE: process.env.MYSQL_DATABASE || 'scraper_worker',
+  MYSQL_USER: process.env.MYSQL_USER || 'scraper',
+  MYSQL_PASSWORD: process.env.MYSQL_PASSWORD || 'scraper_password',
 
   // External Services
   SCRAPER_BASE_URL: process.env.SCRAPER_BASE_URL || 'http://localhost:3001',

@@ -9,11 +9,11 @@ async function main() {
   const app = await buildApp();
 
   // Initialize database and run migrations
-  const db = initDatabase();
-  app.log.info({ path: CONFIG.DATABASE_PATH }, 'Database initialized');
+  await initDatabase();
+  app.log.info({ host: CONFIG.MYSQL_HOST, database: CONFIG.MYSQL_DATABASE }, 'Database initialized');
 
   // Recover any stale tasks from previous crash
-  recoverStaleTasks(db);
+  await recoverStaleTasks();
   app.log.info('Stale task recovery complete');
 
   // Start workers
@@ -42,7 +42,7 @@ async function main() {
     await syncProcessor.stop();
 
     await app.close();
-    closeDatabase();
+    await closeDatabase();
 
     app.log.info('Shutdown complete');
     process.exit(0);

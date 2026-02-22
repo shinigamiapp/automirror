@@ -1,54 +1,65 @@
-import Database from 'better-sqlite3';
+import mysql, { type Pool } from 'mysql2/promise';
 import { CONFIG } from '../config.js';
 import { runMigrations } from './migrations/001_initial.js';
 
-let db: Database.Database | null = null;
+let pool: Pool | null = null;
 
-export function getDatabase(): Database.Database {
-  if (!db) {
+export function getDatabase(): Pool {
+  if (!pool) {
     throw new Error('Database not initialized. Call initDatabase() first.');
   }
-  return db;
+  return pool;
 }
 
-export function initDatabase(dbPath?: string): Database.Database {
-  const path = dbPath ?? CONFIG.DATABASE_PATH;
+export async function initDatabase(): Promise<Pool> {
+  pool = mysql.createPool({
+    host: CONFIG.MYSQL_HOST,
+    port: CONFIG.MYSQL_PORT,
+    user: CONFIG.MYSQL_USER,
+    password: CONFIG.MYSQL_PASSWORD,
+    database: CONFIG.MYSQL_DATABASE,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    dateStrings: true,
+    timezone: '+00:00',
+    supportBigNumbers: true,
+    bigNumberStrings: false,
+  });
 
-  db = new Database(path);
-
-  // Enable WAL mode for better concurrent read/write performance
-  db.pragma('journal_mode = WAL');
-  db.pragma('busy_timeout = 5000');
-  db.pragma('synchronous = NORMAL');
-  db.pragma('foreign_keys = ON');
+  // Verify connection
+  const connection = await pool.getConnection();
+  connection.release();
 
   // Run migrations
-  runMigrations(db);
+  await runMigrations(pool);
 
-  return db;
+  return pool;
 }
 
-export function closeDatabase(): void {
-  if (db) {
-    db.close();
-    db = null;
+export async function closeDatabase(): Promise<void> {
+  if (pool) {
+    await pool.end();
+    pool = null;
   }
 }
 
-export function recoverStaleTasks(database: Database.Database): void {
+export async function recoverStaleTasks(): Promise<void> {
+  const db = getDatabase();
+
   // 1. Reset stuck manga sync tasks
-  database.prepare(`
+  await db.execute(`
     UPDATE manga_sync_tasks
     SET status = CASE
       WHEN zip_url IS NOT NULL THEN 'scraped'
       ELSE 'pending'
     END,
-    updated_at = datetime('now')
+    updated_at = NOW()
     WHERE status IN ('scraping', 'uploading')
-  `).run();
+  `);
 
   // 2. Reset stuck manga status based on remaining tasks
-  database.prepare(`
+  await db.execute(`
     UPDATE manga_registry
     SET status = CASE
       WHEN (SELECT COUNT(*) FROM manga_sync_tasks
@@ -61,7 +72,7 @@ export function recoverStaleTasks(database: Database.Database): void {
       THEN 'error'
       ELSE 'idle'
     END,
-    updated_at = datetime('now')
+    updated_at = NOW()
     WHERE status IN ('scanning', 'syncing')
-  `).run();
+  `);
 }

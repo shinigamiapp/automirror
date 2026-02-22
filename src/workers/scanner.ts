@@ -29,7 +29,7 @@ export async function scanManga(
 ): Promise<void> {
   log.info({ mangaId: manga.manga_id, title: manga.series_title }, 'Scanning manga');
 
-  mangaRepo.updateMangaStatus(manga.id, 'scanning');
+  await mangaRepo.updateMangaStatus(manga.id, 'scanning');
 
   try {
     // Step 1: Quick metadata check
@@ -51,7 +51,7 @@ export async function scanManga(
         Date.now() + manga.check_interval_minutes * 60_000,
       ).toISOString();
 
-      mangaRepo.updateMangaScanResult(manga.id, {
+      await mangaRepo.updateMangaScanResult(manga.id, {
         source_chapter_count: sourceTotal,
         source_last_chapter: sourceLastChapter,
         next_scan_at: nextScan,
@@ -87,7 +87,7 @@ export async function scanManga(
         Date.now() + manga.check_interval_minutes * 60_000,
       ).toISOString();
 
-      mangaRepo.updateMangaScanResult(manga.id, {
+      await mangaRepo.updateMangaScanResult(manga.id, {
         source_chapter_count: sourceTotal,
         source_last_chapter: sourceLastChapter,
         next_scan_at: nextScan,
@@ -101,7 +101,7 @@ export async function scanManga(
     );
 
     // Create sync tasks
-    mangaRepo.createSyncTasks(
+    await mangaRepo.createSyncTasks(
       manga.id,
       missingChapters.map((ch: ScraperChapterListItem, index: number) => ({
         chapter_url: ch.url,
@@ -115,27 +115,21 @@ export async function scanManga(
       Date.now() + manga.check_interval_minutes * 60_000,
     ).toISOString();
 
-    mangaRepo.updateMangaScanResult(manga.id, {
+    await mangaRepo.updateMangaScanResult(manga.id, {
       source_chapter_count: sourceTotal,
       source_last_chapter: sourceLastChapter,
       next_scan_at: nextScan,
     });
 
     // Transition to syncing
-    mangaRepo.updateMangaStatus(manga.id, 'syncing');
+    await mangaRepo.updateMangaStatus(manga.id, 'syncing');
 
     // Update progress totals
-    const db = (await import('../db/index.js')).getDatabase();
-    db.prepare(`
-      UPDATE manga_registry
-      SET sync_progress_total = sync_progress_total + ?,
-          updated_at = datetime('now')
-      WHERE id = ?
-    `).run(missingChapters.length, manga.id);
+    await mangaRepo.incrementSyncProgressTotal(manga.id, missingChapters.length);
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error({ mangaId: manga.manga_id, err: error }, 'Scan failed');
-    mangaRepo.updateMangaStatus(manga.id, 'error', errMsg);
+    await mangaRepo.updateMangaStatus(manga.id, 'error', errMsg);
   }
 }
 
@@ -143,7 +137,7 @@ export async function scanManga(
  * Scanner tick — processes all due manga scans.
  */
 export async function scannerTick(log: FastifyBaseLogger): Promise<void> {
-  const dueManga = mangaRepo.getDueManga();
+  const dueManga = await mangaRepo.getDueManga();
   if (dueManga.length === 0) return;
 
   log.info({ count: dueManga.length }, 'Processing due manga scans');

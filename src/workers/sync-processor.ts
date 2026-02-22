@@ -29,7 +29,7 @@ async function processTask(
   try {
     // Step 1: Get chapter images
     taskLog.info('Step 1: Fetching chapter images');
-    mangaRepo.updateSyncTaskStatus(task.id, 'scraping');
+    await mangaRepo.updateSyncTaskStatus(task.id, 'scraping');
 
     const chapterDetail = await scraperService.getChapterDetail(task.chapter_url);
 
@@ -58,11 +58,11 @@ async function processTask(
     }
 
     const zipUrl = uploadResult.data.publicUrl;
-    mangaRepo.updateSyncTaskStatus(task.id, 'scraped', { zip_url: zipUrl });
+    await mangaRepo.updateSyncTaskStatus(task.id, 'scraped', { zip_url: zipUrl });
 
     // Step 3: Upload ZIP to B2 via Uploader API
     taskLog.info({ zipUrl }, 'Step 3: Uploading to B2');
-    mangaRepo.updateSyncTaskStatus(task.id, 'uploading');
+    await mangaRepo.updateSyncTaskStatus(task.id, 'uploading');
 
     const uploaderResult = await uploaderService.uploadSingle({
       zip_url: zipUrl,
@@ -84,8 +84,8 @@ async function processTask(
     ]);
 
     // Mark completed
-    mangaRepo.updateSyncTaskStatus(task.id, 'completed');
-    mangaRepo.updateMangaSyncProgress(manga.id);
+    await mangaRepo.updateSyncTaskStatus(task.id, 'completed');
+    await mangaRepo.updateMangaSyncProgress(manga.id);
     debouncedCachePurge(manga.manga_id);
 
     taskLog.info('Chapter synced successfully');
@@ -93,8 +93,8 @@ async function processTask(
     const errMsg = error instanceof Error ? error.message : String(error);
     taskLog.error({ err: error }, 'Task failed');
 
-    mangaRepo.updateSyncTaskStatus(task.id, 'failed', { error: errMsg });
-    mangaRepo.updateMangaSyncProgress(manga.id);
+    await mangaRepo.updateSyncTaskStatus(task.id, 'failed', { error: errMsg });
+    await mangaRepo.updateMangaSyncProgress(manga.id);
   }
 }
 
@@ -105,34 +105,28 @@ async function processManga(
   manga: MangaRegistry,
   log: FastifyBaseLogger,
 ): Promise<void> {
-  const pendingTasks = mangaRepo.getPendingSyncTasks(
+  const pendingTasks = await mangaRepo.getPendingSyncTasks(
     manga.id,
     CONFIG.DEFAULT_CHAPTERS_PER_MANGA,
   );
 
   if (pendingTasks.length === 0) {
     // Check if all tasks are done
-    const allTasks = mangaRepo.getSyncTasksByManga(manga.id);
+    const allTasks = await mangaRepo.getSyncTasksByManga(manga.id);
     const hasActive = allTasks.some((t) =>
       ['pending', 'scraping', 'scraped', 'uploading'].includes(t.status),
     );
 
     if (!hasActive) {
       const hasFailed = allTasks.some((t) => t.status === 'failed');
-      mangaRepo.updateMangaStatus(
+      await mangaRepo.updateMangaStatus(
         manga.id,
         hasFailed ? 'error' : 'idle',
         hasFailed ? 'Some chapters failed to sync' : undefined,
       );
 
       if (!hasFailed) {
-        // Update last synced timestamp
-        const db = (await import('../db/index.js')).getDatabase();
-        db.prepare(`
-          UPDATE manga_registry
-          SET last_synced_at = datetime('now'), updated_at = datetime('now')
-          WHERE id = ?
-        `).run(manga.id);
+        await mangaRepo.updateLastSyncedAt(manga.id);
       }
     }
     return;
@@ -148,7 +142,7 @@ async function processManga(
  * Sync processor tick — processes pending sync tasks for all active manga.
  */
 export async function syncProcessorTick(log: FastifyBaseLogger): Promise<void> {
-  const activeManga = mangaRepo.getMangaWithActiveTasks();
+  const activeManga = await mangaRepo.getMangaWithActiveTasks();
   if (activeManga.length === 0) return;
 
   log.info({ count: activeManga.length }, 'Processing active manga syncs');

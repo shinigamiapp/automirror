@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { getDatabase } from '../index.js';
 import type { MangaRegistry, MangaSyncTask } from '../../types.js';
 
@@ -11,75 +12,87 @@ function extractDomainAndSlug(url: string): { domain: string; slug: string } {
   return { domain, slug };
 }
 
-export function createManga(data: {
+export async function createManga(data: {
   manga_id: string;
   manga_url: string;
   series_title: string;
   check_interval_minutes?: number;
   priority?: number;
   auto_sync_enabled?: boolean;
-}): MangaRegistry {
+}): Promise<MangaRegistry> {
   const db = getDatabase();
   const id = randomUUID();
   const { domain, slug } = extractDomainAndSlug(data.manga_url);
 
-  db.prepare(`
-    INSERT INTO manga_registry (id, manga_id, manga_url, source_domain, manga_slug, series_title, check_interval_minutes, priority, auto_sync_enabled, next_scan_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `).run(
-    id,
-    data.manga_id,
-    data.manga_url,
-    domain,
-    slug,
-    data.series_title,
-    data.check_interval_minutes ?? 360,
-    data.priority ?? 0,
-    data.auto_sync_enabled === false ? 0 : 1,
+  await db.execute(
+    `INSERT INTO manga_registry (id, manga_id, manga_url, source_domain, manga_slug, series_title, check_interval_minutes, priority, auto_sync_enabled, next_scan_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [
+      id,
+      data.manga_id,
+      data.manga_url,
+      domain,
+      slug,
+      data.series_title,
+      data.check_interval_minutes ?? 360,
+      data.priority ?? 0,
+      data.auto_sync_enabled === false ? 0 : 1,
+    ],
   );
 
-  return getMangaById(id)!;
+  return (await getMangaById(id))!;
 }
 
-export function getMangaById(id: string): MangaRegistry | undefined {
+export async function getMangaById(id: string): Promise<MangaRegistry | undefined> {
   const db = getDatabase();
-  return db.prepare('SELECT * FROM manga_registry WHERE id = ?').get(id) as MangaRegistry | undefined;
+  const [rows] = await db.execute<RowDataPacket[]>(
+    'SELECT * FROM manga_registry WHERE id = ?',
+    [id],
+  );
+  return rows[0] as MangaRegistry | undefined;
 }
 
-export function getMangaByMangaId(mangaId: string): MangaRegistry | undefined {
+export async function getMangaByMangaId(mangaId: string): Promise<MangaRegistry | undefined> {
   const db = getDatabase();
-  return db.prepare('SELECT * FROM manga_registry WHERE manga_id = ?').get(mangaId) as MangaRegistry | undefined;
+  const [rows] = await db.execute<RowDataPacket[]>(
+    'SELECT * FROM manga_registry WHERE manga_id = ?',
+    [mangaId],
+  );
+  return rows[0] as MangaRegistry | undefined;
 }
 
-export function listManga(options: {
+export async function listManga(options: {
   status?: string;
   page: number;
   page_size: number;
-}): { manga: MangaRegistry[]; total: number } {
+}): Promise<{ manga: MangaRegistry[]; total: number }> {
   const db = getDatabase();
   const { status, page, page_size } = options;
   const offset = (page - 1) * page_size;
 
   let whereClause = '';
-  const params: unknown[] = [];
+  const params: (string | number)[] = [];
 
   if (status) {
     whereClause = 'WHERE status = ?';
     params.push(status);
   }
 
-  const total = db.prepare(
+  const [countRows] = await db.execute<RowDataPacket[]>(
     `SELECT COUNT(*) as count FROM manga_registry ${whereClause}`,
-  ).get(...params) as { count: number };
+    params,
+  );
+  const total = Number(countRows[0].count);
 
-  const manga = db.prepare(
+  const [rows] = await db.execute<RowDataPacket[]>(
     `SELECT * FROM manga_registry ${whereClause} ORDER BY priority DESC, created_at DESC LIMIT ? OFFSET ?`,
-  ).all(...params, page_size, offset) as MangaRegistry[];
+    [...params, page_size, offset],
+  );
 
-  return { manga, total: total.count };
+  return { manga: rows as MangaRegistry[], total };
 }
 
-export function updateManga(
+export async function updateManga(
   id: string,
   updates: {
     check_interval_minutes?: number;
@@ -88,10 +101,10 @@ export function updateManga(
     manga_url?: string;
     series_title?: string;
   },
-): MangaRegistry | undefined {
+): Promise<MangaRegistry | undefined> {
   const db = getDatabase();
-  const setClauses: string[] = ["updated_at = datetime('now')"];
-  const params: unknown[] = [];
+  const setClauses: string[] = ['updated_at = NOW()'];
+  const params: (string | number | null)[] = [];
 
   if (updates.check_interval_minutes !== undefined) {
     setClauses.push('check_interval_minutes = ?');
@@ -116,188 +129,223 @@ export function updateManga(
   }
 
   params.push(id);
-  const result = db.prepare(
+  const [result] = await db.execute<ResultSetHeader>(
     `UPDATE manga_registry SET ${setClauses.join(', ')} WHERE id = ?`,
-  ).run(...params);
+    params,
+  );
 
-  if (result.changes === 0) return undefined;
+  if (result.affectedRows === 0) return undefined;
   return getMangaById(id);
 }
 
-export function deleteManga(id: string): boolean {
+export async function deleteManga(id: string): Promise<boolean> {
   const db = getDatabase();
-  const result = db.prepare('DELETE FROM manga_registry WHERE id = ?').run(id);
-  return result.changes > 0;
+  const [result] = await db.execute<ResultSetHeader>(
+    'DELETE FROM manga_registry WHERE id = ?',
+    [id],
+  );
+  return result.affectedRows > 0;
 }
 
-export function updateMangaStatus(
+export async function updateMangaStatus(
   id: string,
   status: string,
   error?: string,
-): void {
+): Promise<void> {
   const db = getDatabase();
   if (error) {
-    db.prepare(`
-      UPDATE manga_registry
-      SET status = ?, last_error = ?, last_error_at = datetime('now'),
-          consecutive_failures = consecutive_failures + 1, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(status, error, id);
+    await db.execute(
+      `UPDATE manga_registry
+       SET status = ?, last_error = ?, last_error_at = NOW(),
+           consecutive_failures = consecutive_failures + 1, updated_at = NOW()
+       WHERE id = ?`,
+      [status, error, id],
+    );
   } else {
-    db.prepare(`
-      UPDATE manga_registry
-      SET status = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(status, id);
+    await db.execute(
+      `UPDATE manga_registry
+       SET status = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [status, id],
+    );
   }
 }
 
-export function updateMangaScanResult(
+export async function updateMangaScanResult(
   id: string,
   data: {
     source_chapter_count: number;
     source_last_chapter: number;
     next_scan_at: string;
   },
-): void {
+): Promise<void> {
   const db = getDatabase();
-  db.prepare(`
-    UPDATE manga_registry
-    SET source_chapter_count = ?, source_last_chapter = ?,
-        last_scanned_at = datetime('now'), next_scan_at = ?,
-        consecutive_failures = 0, last_error = NULL,
-        status = 'idle', updated_at = datetime('now')
-    WHERE id = ?
-  `).run(data.source_chapter_count, data.source_last_chapter, data.next_scan_at, id);
+  await db.execute(
+    `UPDATE manga_registry
+     SET source_chapter_count = ?, source_last_chapter = ?,
+         last_scanned_at = NOW(), next_scan_at = ?,
+         consecutive_failures = 0, last_error = NULL,
+         status = 'idle', updated_at = NOW()
+     WHERE id = ?`,
+    [data.source_chapter_count, data.source_last_chapter, data.next_scan_at, id],
+  );
 }
 
-export function updateMangaSyncProgress(id: string): void {
+export async function updateMangaSyncProgress(id: string): Promise<void> {
   const db = getDatabase();
-  db.prepare(`
-    UPDATE manga_registry
-    SET sync_progress_completed = (
-          SELECT COUNT(*) FROM manga_sync_tasks
-          WHERE manga_registry_id = ? AND status IN ('completed', 'skipped')
-        ),
-        sync_progress_failed = (
-          SELECT COUNT(*) FROM manga_sync_tasks
-          WHERE manga_registry_id = ? AND status = 'failed'
-        ),
-        updated_at = datetime('now')
-    WHERE id = ?
-  `).run(id, id, id);
+  await db.execute(
+    `UPDATE manga_registry
+     SET sync_progress_completed = (
+           SELECT COUNT(*) FROM manga_sync_tasks
+           WHERE manga_registry_id = ? AND status IN ('completed', 'skipped')
+         ),
+         sync_progress_failed = (
+           SELECT COUNT(*) FROM manga_sync_tasks
+           WHERE manga_registry_id = ? AND status = 'failed'
+         ),
+         updated_at = NOW()
+     WHERE id = ?`,
+    [id, id, id],
+  );
 }
 
-export function getDueManga(): MangaRegistry[] {
+export async function getDueManga(): Promise<MangaRegistry[]> {
   const db = getDatabase();
-  return db.prepare(`
+  const [rows] = await db.execute<RowDataPacket[]>(`
     SELECT * FROM manga_registry
     WHERE auto_sync_enabled = 1
       AND status = 'idle'
-      AND (next_scan_at IS NULL OR next_scan_at <= datetime('now'))
+      AND (next_scan_at IS NULL OR next_scan_at <= NOW())
     ORDER BY priority DESC, next_scan_at ASC
-  `).all() as MangaRegistry[];
+  `);
+  return rows as MangaRegistry[];
 }
 
-export function updateDomain(oldDomain: string, newDomain: string): number {
+export async function updateDomain(oldDomain: string, newDomain: string): Promise<number> {
   const db = getDatabase();
-  const result = db.prepare(`
-    UPDATE manga_registry
-    SET manga_url = REPLACE(manga_url, ?, ?),
-        source_domain = ?,
-        updated_at = datetime('now')
-    WHERE source_domain = ?
-  `).run(oldDomain, newDomain, newDomain, oldDomain);
-  return result.changes;
+  const [result] = await db.execute<ResultSetHeader>(
+    `UPDATE manga_registry
+     SET manga_url = REPLACE(manga_url, ?, ?),
+         source_domain = ?,
+         updated_at = NOW()
+     WHERE source_domain = ?`,
+    [oldDomain, newDomain, newDomain, oldDomain],
+  );
+  return result.affectedRows;
 }
 
 // --- Sync Tasks ---
 
-export function createSyncTasks(
+export async function createSyncTasks(
   mangaRegistryId: string,
   chapters: Array<{ chapter_url: string; chapter_number: number; weight: number }>,
-): void {
+): Promise<void> {
   const db = getDatabase();
-  const insert = db.prepare(`
-    INSERT INTO manga_sync_tasks (id, manga_registry_id, chapter_url, chapter_number, weight)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  const insertMany = db.transaction((tasks: typeof chapters) => {
-    for (const task of tasks) {
-      insert.run(randomUUID(), mangaRegistryId, task.chapter_url, task.chapter_number, task.weight);
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    for (const task of chapters) {
+      await connection.execute(
+        `INSERT INTO manga_sync_tasks (id, manga_registry_id, chapter_url, chapter_number, weight)
+         VALUES (?, ?, ?, ?, ?)`,
+        [randomUUID(), mangaRegistryId, task.chapter_url, task.chapter_number, task.weight],
+      );
     }
-  });
-
-  insertMany(chapters);
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
-export function getPendingSyncTasks(
+export async function getPendingSyncTasks(
   mangaRegistryId: string,
   limit: number,
-): MangaSyncTask[] {
+): Promise<MangaSyncTask[]> {
   const db = getDatabase();
-  return db.prepare(`
-    SELECT * FROM manga_sync_tasks
-    WHERE manga_registry_id = ? AND status = 'pending'
-    ORDER BY weight ASC
-    LIMIT ?
-  `).all(mangaRegistryId, limit) as MangaSyncTask[];
+  const [rows] = await db.execute<RowDataPacket[]>(
+    `SELECT * FROM manga_sync_tasks
+     WHERE manga_registry_id = ? AND status = 'pending'
+     ORDER BY weight ASC
+     LIMIT ?`,
+    [mangaRegistryId, limit],
+  );
+  return rows as MangaSyncTask[];
 }
 
-export function getSyncTasksByManga(mangaRegistryId: string): MangaSyncTask[] {
+export async function getSyncTasksByManga(mangaRegistryId: string): Promise<MangaSyncTask[]> {
   const db = getDatabase();
-  return db.prepare(
+  const [rows] = await db.execute<RowDataPacket[]>(
     'SELECT * FROM manga_sync_tasks WHERE manga_registry_id = ? ORDER BY weight ASC',
-  ).all(mangaRegistryId) as MangaSyncTask[];
+    [mangaRegistryId],
+  );
+  return rows as MangaSyncTask[];
 }
 
-export function getFailedSyncTasks(mangaRegistryId: string): MangaSyncTask[] {
+export async function getFailedSyncTasks(mangaRegistryId: string): Promise<MangaSyncTask[]> {
   const db = getDatabase();
-  return db.prepare(
+  const [rows] = await db.execute<RowDataPacket[]>(
     "SELECT * FROM manga_sync_tasks WHERE manga_registry_id = ? AND status = 'failed' ORDER BY weight ASC",
-  ).all(mangaRegistryId) as MangaSyncTask[];
+    [mangaRegistryId],
+  );
+  return rows as MangaSyncTask[];
 }
 
-export function updateSyncTaskStatus(
+export async function updateSyncTaskStatus(
   id: string,
   status: string,
   updates?: { zip_url?: string; error?: string },
-): void {
+): Promise<void> {
   const db = getDatabase();
-  db.prepare(`
-    UPDATE manga_sync_tasks
-    SET status = ?,
-        zip_url = COALESCE(?, zip_url),
-        error = ?,
-        retry_count = CASE WHEN ? = 'failed' THEN retry_count + 1 ELSE retry_count END,
-        updated_at = datetime('now')
-    WHERE id = ?
-  `).run(status, updates?.zip_url ?? null, updates?.error ?? null, status, id);
+  await db.execute(
+    `UPDATE manga_sync_tasks
+     SET status = ?,
+         zip_url = COALESCE(?, zip_url),
+         error = ?,
+         retry_count = CASE WHEN ? = 'failed' THEN retry_count + 1 ELSE retry_count END,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [status, updates?.zip_url ?? null, updates?.error ?? null, status, id],
+  );
 }
 
-export function retryFailedTasks(mangaRegistryId: string): number {
+export async function retryFailedTasks(mangaRegistryId: string): Promise<number> {
   const db = getDatabase();
-  const result = db.prepare(`
-    UPDATE manga_sync_tasks
-    SET status = 'pending', error = NULL, updated_at = datetime('now')
-    WHERE manga_registry_id = ? AND status = 'failed'
-  `).run(mangaRegistryId);
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
 
-  if (result.changes > 0) {
-    db.prepare(`
-      UPDATE manga_registry
-      SET status = 'syncing', last_error = NULL, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(mangaRegistryId);
+    const [result] = await connection.execute<ResultSetHeader>(
+      `UPDATE manga_sync_tasks
+       SET status = 'pending', error = NULL, updated_at = NOW()
+       WHERE manga_registry_id = ? AND status = 'failed'`,
+      [mangaRegistryId],
+    );
+
+    if (result.affectedRows > 0) {
+      await connection.execute(
+        `UPDATE manga_registry
+         SET status = 'syncing', last_error = NULL, updated_at = NOW()
+         WHERE id = ?`,
+        [mangaRegistryId],
+      );
+    }
+
+    await connection.commit();
+    return result.affectedRows;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
   }
-
-  return result.changes;
 }
 
-export function getMangaWithActiveTasks(): MangaRegistry[] {
+export async function getMangaWithActiveTasks(): Promise<MangaRegistry[]> {
   const db = getDatabase();
-  return db.prepare(`
+  const [rows] = await db.execute<RowDataPacket[]>(`
     SELECT mr.* FROM manga_registry mr
     WHERE mr.status = 'syncing'
       AND EXISTS (
@@ -306,14 +354,37 @@ export function getMangaWithActiveTasks(): MangaRegistry[] {
           AND mst.status IN ('pending', 'scraping', 'scraped', 'uploading')
       )
     ORDER BY mr.priority DESC
-  `).all() as MangaRegistry[];
+  `);
+  return rows as MangaRegistry[];
 }
 
-export function triggerForceScan(id: string): void {
+export async function triggerForceScan(id: string): Promise<void> {
   const db = getDatabase();
-  db.prepare(`
-    UPDATE manga_registry
-    SET next_scan_at = datetime('now'), status = 'idle', updated_at = datetime('now')
-    WHERE id = ?
-  `).run(id);
+  await db.execute(
+    `UPDATE manga_registry
+     SET next_scan_at = NOW(), status = 'idle', updated_at = NOW()
+     WHERE id = ?`,
+    [id],
+  );
+}
+
+export async function incrementSyncProgressTotal(id: string, count: number): Promise<void> {
+  const db = getDatabase();
+  await db.execute(
+    `UPDATE manga_registry
+     SET sync_progress_total = sync_progress_total + ?,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [count, id],
+  );
+}
+
+export async function updateLastSyncedAt(id: string): Promise<void> {
+  const db = getDatabase();
+  await db.execute(
+    `UPDATE manga_registry
+     SET last_synced_at = NOW(), updated_at = NOW()
+     WHERE id = ?`,
+    [id],
+  );
 }

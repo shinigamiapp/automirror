@@ -29,12 +29,12 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
-      const existing = mangaRepo.getMangaByMangaId(request.body.manga_id);
+      const existing = await mangaRepo.getMangaByMangaId(request.body.manga_id);
       if (existing) {
         return reply.code(409).send({ success: false, error: 'Manga already registered' });
       }
 
-      const manga = mangaRepo.createManga(request.body);
+      const manga = await mangaRepo.createManga(request.body);
       return reply.code(201).send({ success: true, data: manga });
     },
   });
@@ -61,7 +61,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request) => {
       const { status, page, page_size } = request.query;
-      const result = mangaRepo.listManga({ status, page, page_size });
+      const result = await mangaRepo.listManga({ status, page, page_size });
       return {
         success: true as const,
         data: { ...result, page, page_size },
@@ -95,11 +95,11 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
-      const manga = mangaRepo.getMangaById(request.params.id);
+      const manga = await mangaRepo.getMangaById(request.params.id);
       if (!manga) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
-      const failedTasks = mangaRepo.getFailedSyncTasks(manga.id);
+      const failedTasks = await mangaRepo.getFailedSyncTasks(manga.id);
       return {
         success: true as const,
         data: {
@@ -131,7 +131,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
-      const updated = mangaRepo.updateManga(request.params.id, request.body);
+      const updated = await mangaRepo.updateManga(request.params.id, request.body);
       if (!updated) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
@@ -153,7 +153,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
-      const deleted = mangaRepo.deleteManga(request.params.id);
+      const deleted = await mangaRepo.deleteManga(request.params.id);
       if (!deleted) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
@@ -175,11 +175,11 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
-      const manga = mangaRepo.getMangaById(request.params.id);
+      const manga = await mangaRepo.getMangaById(request.params.id);
       if (!manga) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
-      mangaRepo.triggerForceScan(manga.id);
+      await mangaRepo.triggerForceScan(manga.id);
       return { success: true as const, message: 'Scan triggered' };
     },
   });
@@ -203,12 +203,12 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
-      const manga = mangaRepo.getMangaById(request.params.id);
+      const manga = await mangaRepo.getMangaById(request.params.id);
       if (!manga) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
 
-      const retriedCount = mangaRepo.retryFailedTasks(manga.id);
+      const retriedCount = await mangaRepo.retryFailedTasks(manga.id);
       if (retriedCount === 0) {
         return reply.code(400).send({ success: false, error: 'No failed tasks to retry' });
       }
@@ -249,12 +249,12 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       let skipped = 0;
 
       for (const item of _request.body.manga) {
-        const existing = mangaRepo.getMangaByMangaId(item.manga_id);
+        const existing = await mangaRepo.getMangaByMangaId(item.manga_id);
         if (existing) {
           results.push({ manga_id: item.manga_id, status: 'skipped' });
           skipped++;
         } else {
-          mangaRepo.createManga(item);
+          await mangaRepo.createManga(item);
           results.push({ manga_id: item.manga_id, status: 'created' });
           created++;
         }
@@ -283,7 +283,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request) => {
-      const updated = mangaRepo.updateDomain(request.body.old_domain, request.body.new_domain);
+      const updated = await mangaRepo.updateDomain(request.body.old_domain, request.body.new_domain);
       return {
         success: true as const,
         data: { updated },
