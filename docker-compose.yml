@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: scraper-worker-mysql
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-root}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
+      - MYSQL_USER=${MYSQL_USER:-scraper}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  scraper-worker:
+    build: .
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=/app/data/scraper.db
+      - SCRAPER_BASE_URL=${SCRAPER_BASE_URL}
+      - UPLOADER_BASE_URL=${UPLOADER_BASE_URL}
+      - BACKEND_API_URL=${BACKEND_API_URL}
+      - BACKEND_API_KEY=${BACKEND_API_KEY}
+      - CACHE_PURGE_URL=${CACHE_PURGE_URL}
+      - CACHE_PURGE_API_KEY=${CACHE_PURGE_API_KEY}
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
+      - UPLOADER_API_KEY=${UPLOADER_API_KEY}
+      - NOVU_API_KEY=${NOVU_API_KEY}
+      - NOVU_SUBSCRIBER_ID=${NOVU_SUBSCRIBER_ID}
+      - DASHBOARD_URL=${DASHBOARD_URL}
+      - API_URL=${API_URL}
+      # Reserved for future MySQL runtime support
+      - MYSQL_HOST=${MYSQL_HOST:-mysql}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
+      - MYSQL_USER=${MYSQL_USER:-scraper}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  mysql_data:
