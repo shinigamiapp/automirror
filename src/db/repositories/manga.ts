@@ -63,20 +63,34 @@ export async function getMangaByMangaId(mangaId: string): Promise<MangaRegistry 
 
 export async function listManga(options: {
   status?: string;
+  title_query?: string;
   page: number;
   page_size: number;
 }): Promise<{ manga: MangaRegistry[]; total: number }> {
   const db = getDatabase();
-  const { status, page, page_size } = options;
-  const offset = (page - 1) * page_size;
+  const { status, title_query, page, page_size } = options;
+  const normalizedPage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+  const normalizedPageSize = Number.isFinite(page_size) && page_size > 0
+    ? Math.min(Math.floor(page_size), 100)
+    : 20;
+  const offset = (normalizedPage - 1) * normalizedPageSize;
 
-  let whereClause = '';
+  const whereClauses: string[] = [];
   const params: (string | number)[] = [];
 
   if (status) {
-    whereClause = 'WHERE status = ?';
+    whereClauses.push('status = ?');
     params.push(status);
   }
+
+  if (title_query && title_query.trim().length > 0) {
+    whereClauses.push('series_title LIKE ?');
+    params.push(`%${title_query.trim()}%`);
+  }
+
+  const whereClause = whereClauses.length > 0
+    ? `WHERE ${whereClauses.join(' AND ')}`
+    : '';
 
   const [countRows] = await db.execute<RowDataPacket[]>(
     `SELECT COUNT(*) as count FROM manga_registry ${whereClause}`,
@@ -85,8 +99,8 @@ export async function listManga(options: {
   const total = Number(countRows[0].count);
 
   const [rows] = await db.execute<RowDataPacket[]>(
-    `SELECT * FROM manga_registry ${whereClause} ORDER BY priority DESC, created_at DESC LIMIT ? OFFSET ?`,
-    [...params, page_size, offset],
+    `SELECT * FROM manga_registry ${whereClause} ORDER BY priority DESC, created_at DESC LIMIT ${normalizedPageSize} OFFSET ${offset}`,
+    params,
   );
 
   return { manga: rows as MangaRegistry[], total };
@@ -180,12 +194,15 @@ export async function updateMangaScanResult(
   },
 ): Promise<void> {
   const db = getDatabase();
+  // Only reset status to 'idle' if currently in 'scanning' — never override 'syncing'
+  // to avoid a race where a re-scan clears the syncing state before tasks complete.
   await db.execute(
     `UPDATE manga_registry
      SET source_chapter_count = ?, source_last_chapter = ?,
          last_scanned_at = NOW(), next_scan_at = ?,
          consecutive_failures = 0, last_error = NULL,
-         status = 'idle', updated_at = NOW()
+         status = IF(status = 'scanning', 'idle', status),
+         updated_at = NOW()
      WHERE id = ?`,
     [data.source_chapter_count, data.source_last_chapter, data.next_scan_at, id],
   );
@@ -265,12 +282,13 @@ export async function getPendingSyncTasks(
   limit: number,
 ): Promise<MangaSyncTask[]> {
   const db = getDatabase();
+  // Note: LIMIT cannot be parameterized in mysql2 prepared statements
   const [rows] = await db.execute<RowDataPacket[]>(
     `SELECT * FROM manga_sync_tasks
      WHERE manga_registry_id = ? AND status = 'pending'
      ORDER BY weight ASC
-     LIMIT ?`,
-    [mangaRegistryId, limit],
+     LIMIT ${Math.floor(limit)}`,
+    [mangaRegistryId],
   );
   return rows as MangaSyncTask[];
 }
@@ -387,4 +405,77 @@ export async function updateLastSyncedAt(id: string): Promise<void> {
      WHERE id = ?`,
     [id],
   );
+}
+
+export async function updateBackendChapterStats(
+  id: string,
+  data: { backend_chapter_count: number; backend_last_chapter: number | null },
+): Promise<void> {
+  const db = getDatabase();
+  await db.execute(
+    `UPDATE manga_registry
+     SET backend_chapter_count = ?,
+         backend_last_chapter = ?,
+         updated_at = NOW()
+     WHERE id = ?`,
+    [data.backend_chapter_count, data.backend_last_chapter, id],
+  );
+}
+
+export async function incrementBackendChapterStats(
+  id: string,
+  chapterNumber: number,
+): Promise<void> {
+  const db = getDatabase();
+  await db.execute(
+    `UPDATE manga_registry
+     SET backend_chapter_count = backend_chapter_count + 1,
+         backend_last_chapter = GREATEST(COALESCE(backend_last_chapter, 0), ?),
+         updated_at = NOW()
+     WHERE id = ?`,
+    [chapterNumber, id],
+  );
+}
+
+/**
+ * Resolve manga stuck in 'syncing' state whose tasks have all finished.
+ * This handles the edge case where all tasks complete but the manga status
+ * never transitioned back because getMangaWithActiveTasks excluded it.
+ */
+export async function resolveCompletedSyncingManga(): Promise<number> {
+  const db = getDatabase();
+
+  // Flip to 'error' if any failed tasks remain, otherwise 'idle'
+  const [errorResult] = await db.execute<ResultSetHeader>(
+    `UPDATE manga_registry
+     SET status = 'error',
+         last_error = 'Some chapters failed to sync',
+         updated_at = NOW()
+     WHERE status = 'syncing'
+       AND NOT EXISTS (
+         SELECT 1 FROM manga_sync_tasks
+         WHERE manga_registry_id = manga_registry.id
+           AND status IN ('pending', 'scraping', 'scraped', 'uploading')
+       )
+       AND EXISTS (
+         SELECT 1 FROM manga_sync_tasks
+         WHERE manga_registry_id = manga_registry.id
+           AND status = 'failed'
+       )`,
+  );
+
+  const [idleResult] = await db.execute<ResultSetHeader>(
+    `UPDATE manga_registry
+     SET status = 'idle',
+         last_synced_at = COALESCE(last_synced_at, NOW()),
+         updated_at = NOW()
+     WHERE status = 'syncing'
+       AND NOT EXISTS (
+         SELECT 1 FROM manga_sync_tasks
+         WHERE manga_registry_id = manga_registry.id
+           AND status IN ('pending', 'scraping', 'scraped', 'uploading', 'failed')
+       )`,
+  );
+
+  return errorResult.affectedRows + idleResult.affectedRows;
 }

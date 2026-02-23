@@ -72,6 +72,13 @@ export async function recoverStaleTasks(): Promise<void> {
       THEN 'error'
       ELSE 'idle'
     END,
+    last_synced_at = CASE
+      WHEN (SELECT COUNT(*) FROM manga_sync_tasks
+            WHERE manga_registry_id = manga_registry.id
+            AND status IN ('pending', 'scraped', 'failed')) = 0
+      THEN COALESCE(last_synced_at, NOW())
+      ELSE last_synced_at
+    END,
     updated_at = NOW()
     WHERE status IN ('scanning', 'syncing')
   `);

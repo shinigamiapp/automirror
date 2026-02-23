@@ -23,6 +23,7 @@ export const mangaIdParamSchema = z.object({
 
 export const listMangaQuerySchema = z.object({
   status: z.enum(['idle', 'scanning', 'syncing', 'error']).optional(),
+  title: z.string().min(1).optional(),
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(20),
 });
