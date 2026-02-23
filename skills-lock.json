@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "wirasm-prp-core-runner": {
+      "source": "smithery/ai",
+      "sourceType": "well-known",
+      "computedHash": "cd2a6fe5bc29277bf2f45a105d781ab2a7030296df3ce1f59593d3ea7f58558d"
+    }
+  }
+}

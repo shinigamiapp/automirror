@@ -53,7 +53,7 @@ async function main() {
 
   // Start server
   await app.listen({ port: CONFIG.PORT, host: CONFIG.HOST });
-  app.log.info(`Scalar API docs at http://localhost:${CONFIG.PORT}/reference`);
+  app.log.info(`Scalar API docs at ${CONFIG.API_URL}/reference`);
 }
 
 main().catch((err) => {

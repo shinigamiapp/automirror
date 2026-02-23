@@ -35,6 +35,27 @@ export interface MangaRegistry {
   updated_at: string;
 }
 
+export interface MangaSource {
+  id: string;
+  manga_registry_id: string;
+  source_url: string;
+  source_domain: string;
+  manga_slug: string;
+  priority: number;
+  is_enabled: boolean;
+  last_chapter_count: number | null;
+  last_chapter_number: number | null;
+  last_scan_status: string | null;
+  last_scan_error: string | null;
+  last_scan_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MangaRegistryWithSources extends MangaRegistry {
+  sources: MangaSource[];
+}
+
 export type MangaStatus = 'idle' | 'scanning' | 'syncing' | 'error';
 
 // --- Manga Sync Tasks ---
@@ -42,6 +63,7 @@ export type MangaStatus = 'idle' | 'scanning' | 'syncing' | 'error';
 export interface MangaSyncTask {
   id: string;
   manga_registry_id: string;
+  source_id: string | null;
 
   chapter_url: string;
   chapter_number: number;
@@ -139,6 +161,7 @@ export interface ScraperChapterListItem {
   title: string;
   url: string;
   date: string;
+  weight?: number;
 }
 
 export interface ScraperChapterListResponse {
@@ -151,12 +174,13 @@ export interface ScraperChapterListResponse {
   data: ScraperChapterListItem[];
 }
 
-export interface ScraperChapterDetailResponse {
-  images: string[];
-  title: string;
-  prevChapter: string | null;
-  nextChapter: string | null;
+export interface ScraperChapterDetailImage {
+  index: number;
+  download_url: string;
 }
+
+// The API returns an array directly, not wrapped in an object
+export type ScraperChapterDetailResponse = ScraperChapterDetailImage[];
 
 export interface ScraperUploadChapterResponse {
   success: boolean;

@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import fastifyCors from '@fastify/cors';
 import fastifySwagger from '@fastify/swagger';
 import scalarReference from '@scalar/fastify-api-reference';
 import {
@@ -9,6 +10,7 @@ import {
 import { z } from 'zod';
 import { CONFIG } from './config.js';
 import { mangaRoutes } from './routes/manga.js';
+import { realtimeRoutes } from './routes/realtime.js';
 import { webhooksRoutes } from './routes/webhooks.js';
 import { requireApiKey } from './hooks/auth.js';
 
@@ -27,6 +29,21 @@ export async function buildApp() {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 
+  // CORS
+  await app.register(fastifyCors, {
+    origin: '*',
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-API-KEY',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+    ],
+  });
+
   // Swagger / OpenAPI
   await app.register(fastifySwagger, {
     openapi: {
@@ -36,10 +53,11 @@ export async function buildApp() {
         version: '3.0.0',
       },
       servers: [
-        { url: `http://localhost:${CONFIG.PORT}`, description: 'Development' },
+        { url: CONFIG.API_URL, description: 'API Server' },
       ],
       tags: [
         { name: 'manga', description: 'Manga registry and auto-sync' },
+        { name: 'realtime', description: 'Realtime auth and events' },
         { name: 'health', description: 'Health and status' },
       ],
       components: {
@@ -66,6 +84,7 @@ export async function buildApp() {
     await instance.register(mangaRoutes);
   }, { prefix: '/manga' });
 
+  await app.register(realtimeRoutes, { prefix: '/realtime' });
   await app.register(webhooksRoutes, { prefix: '/webhooks' });
 
   // Health check

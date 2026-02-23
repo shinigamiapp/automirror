@@ -1,6 +1,9 @@
 ---
-name: prp-core-runner
-description: Orchestrate complete PRP workflow from feature request to pull request. Run create branch, create PRP, execute implementation, commit changes, and create PR in sequence. Use when implementing features using PRP methodology or when user requests full PRP workflow.
+name: wirasm-prp-core-runner
+description: Orchestrate complete PRP workflow from feature request to pull
+  request. Run create branch, create PRP, execute implementation, commit
+  changes, and create PR in sequence. Use when implementing features using PRP
+  methodology or when user requests full PRP workflow.
 ---
 
 # PRP Core Workflow Runner

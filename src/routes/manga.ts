@@ -11,9 +11,19 @@ import {
   updateDomainSchema,
 } from '../schemas/manga.js';
 import * as mangaRepo from '../db/repositories/manga.js';
+import { scanManga } from '../workers/scanner.js';
+import * as realtime from '../services/realtime.js';
 
 export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
+
+  const publishMangaEvent = async (event: realtime.MangaEvent): Promise<void> => {
+    try {
+      await realtime.publishMangaEvent(event);
+    } catch (error) {
+      fastify.log.warn({ err: error, eventType: event.type }, 'Failed to publish realtime event');
+    }
+  };
 
   // POST /manga - Register manga for auto-sync
   app.route({
@@ -35,6 +45,20 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const manga = await mangaRepo.createManga(request.body);
+
+      await publishMangaEvent({
+        type: 'manga.created',
+        manga_id: manga.manga_id,
+        data: { manga },
+        event_version: Date.now(),
+        timestamp: new Date().toISOString(),
+      });
+
+      // Trigger immediate scan in background (don't await to avoid blocking response)
+      scanManga(manga, request.log).catch((err) => {
+        request.log.error({ mangaId: manga.manga_id, err }, 'Initial scan failed');
+      });
+
       return reply.code(201).send({ success: true, data: manga });
     },
   });
@@ -60,8 +84,13 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request) => {
-      const { status, page, page_size } = request.query;
-      const result = await mangaRepo.listManga({ status, page, page_size });
+      const { status, title, page, page_size } = request.query;
+      const result = await mangaRepo.listManga({
+        status,
+        title_query: title,
+        page,
+        page_size,
+      });
       return {
         success: true as const,
         data: { ...result, page, page_size },
@@ -135,6 +164,15 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       if (!updated) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
+
+      await publishMangaEvent({
+        type: 'manga.updated',
+        manga_id: updated.manga_id,
+        data: { manga: updated },
+        event_version: Date.now(),
+        timestamp: new Date().toISOString(),
+      });
+
       return { success: true as const, data: updated };
     },
   });
@@ -153,10 +191,24 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
+      const manga = await mangaRepo.getMangaById(request.params.id);
+      if (!manga) {
+        return reply.code(404).send({ success: false, error: 'Manga not found' });
+      }
+
       const deleted = await mangaRepo.deleteManga(request.params.id);
       if (!deleted) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
+
+      await publishMangaEvent({
+        type: 'manga.deleted',
+        manga_id: manga.manga_id,
+        data: { id: manga.id, manga_id: manga.manga_id },
+        event_version: Date.now(),
+        timestamp: new Date().toISOString(),
+      });
+
       return { success: true as const, message: 'Manga removed from registry' };
     },
   });
@@ -254,9 +306,22 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
           results.push({ manga_id: item.manga_id, status: 'skipped' });
           skipped++;
         } else {
-          await mangaRepo.createManga(item);
+          const manga = await mangaRepo.createManga(item);
           results.push({ manga_id: item.manga_id, status: 'created' });
           created++;
+
+          await publishMangaEvent({
+            type: 'manga.created',
+            manga_id: manga.manga_id,
+            data: { manga },
+            event_version: Date.now(),
+            timestamp: new Date().toISOString(),
+          });
+
+          // Trigger immediate scan in background for each new manga
+          scanManga(manga, _request.log).catch((err) => {
+            _request.log.error({ mangaId: manga.manga_id, err }, 'Initial scan failed');
+          });
         }
       }
 
@@ -273,20 +338,52 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     url: '/update-domain',
     schema: {
       tags: ['manga'],
-      description: 'Bulk domain migration for all manga',
+      description: 'Bulk domain migration for manga source URLs (hostname only)',
       body: updateDomainSchema,
       response: {
         200: z.object({
           success: z.literal(true),
-          data: z.object({ updated: z.number() }),
+          data: z.object({
+            dry_run: z.boolean(),
+            affected_count: z.number().optional(),
+            updated_count: z.number().optional(),
+            sample: z.array(z.object({
+              manga_id: z.string(),
+              old_url: z.string(),
+              new_url: z.string(),
+            })).optional(),
+          }),
         }),
       },
     },
     handler: async (request) => {
-      const updated = await mangaRepo.updateDomain(request.body.old_domain, request.body.new_domain);
+      const dryRun = request.body.dry_run !== false;
+      const result = await mangaRepo.updateSourceDomain(
+        request.body.old_domain,
+        request.body.new_domain,
+        {
+          mangaIds: request.body.manga_ids,
+          dryRun,
+        },
+      );
+
+      if (dryRun) {
+        return {
+          success: true as const,
+          data: {
+            dry_run: true,
+            affected_count: result.affectedCount,
+            sample: result.sample ?? [],
+          },
+        };
+      }
+
       return {
         success: true as const,
-        data: { updated },
+        data: {
+          dry_run: false,
+          updated_count: result.affectedCount,
+        },
       };
     },
   });

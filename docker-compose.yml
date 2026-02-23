@@ -1,41 +1,29 @@
 version: '3.8'
 
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: scraper-worker-mysql
-    command: --default-authentication-plugin=mysql_native_password
-    environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-root}
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
-      - MYSQL_USER=${MYSQL_USER:-scraper}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
   scraper-worker:
     build: .
-    depends_on:
-      mysql:
-        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
+      # nginx-proxy
+      - VIRTUAL_HOST=${VIRTUAL_HOST}
+      - VIRTUAL_PORT=3000
+      - LETSENCRYPT_HOST=${LETSENCRYPT_HOST}
+      # App
       - NODE_ENV=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
-      - MYSQL_USER=${MYSQL_USER:-scraper}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      # MySQL
+      - MYSQL_HOST=${MYSQL_HOST:-mysql}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-automirror}
+      - MYSQL_USER=${MYSQL_USER:-automirror}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      # External Services
+      - SCRAPER_HOSTS=${SCRAPER_HOSTS:-${SCRAPER_BASE_URL}}
+      - SCRAPER_STRATEGY=${SCRAPER_STRATEGY:-round_robin}
+      - SCRAPER_HOST_TIMEOUT_MS=${SCRAPER_HOST_TIMEOUT_MS:-30000}
+      - SCRAPER_HOST_MAX_FAILURES=${SCRAPER_HOST_MAX_FAILURES:-3}
       - SCRAPER_BASE_URL=${SCRAPER_BASE_URL}
       - UPLOADER_BASE_URL=${UPLOADER_BASE_URL}
       - BACKEND_API_URL=${BACKEND_API_URL}
@@ -46,9 +34,14 @@ services:
       - UPLOADER_API_KEY=${UPLOADER_API_KEY}
       - NOVU_API_KEY=${NOVU_API_KEY}
       - NOVU_SUBSCRIBER_ID=${NOVU_SUBSCRIBER_ID}
+      - ABLY_API_KEY=${ABLY_API_KEY}
+      - ABLY_CHANNEL_PREFIX=${ABLY_CHANNEL_PREFIX:-manga}
       - DASHBOARD_URL=${DASHBOARD_URL}
       - API_URL=${API_URL}
     restart: unless-stopped
+    networks:
+      - db-network
+      - proxy-network
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
       interval: 30s
@@ -56,5 +49,8 @@ services:
       retries: 3
       start_period: 20s
 
-volumes:
-  mysql_data:
+networks:
+  db-network:
+    external: true
+  proxy-network:
+    external: true

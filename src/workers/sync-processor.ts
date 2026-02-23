@@ -5,7 +5,29 @@ import * as scraperService from '../services/scraper.js';
 import * as uploaderService from '../services/uploader.js';
 import * as backendService from '../services/backend.js';
 import { debouncedCachePurge } from '../services/cache.js';
+import * as realtime from '../services/realtime.js';
 import type { MangaRegistry, MangaSyncTask } from '../types.js';
+
+async function publishSyncProgressEvent(manga: MangaRegistry): Promise<void> {
+  const latest = await mangaRepo.getMangaById(manga.id);
+  if (!latest) return;
+
+  try {
+    await realtime.publishMangaEvent({
+      type: 'manga.sync.progress',
+      manga_id: latest.manga_id,
+      data: {
+        completed: latest.sync_progress_completed,
+        total: latest.sync_progress_total,
+        failed: latest.sync_progress_failed,
+      },
+      event_version: Date.now(),
+      timestamp: new Date().toISOString(),
+    });
+  } catch {
+    // Realtime publish failures should never block sync processing.
+  }
+}
 
 /**
  * Process a single sync task through the 4-step flow:
@@ -33,17 +55,16 @@ async function processTask(
 
     const chapterDetail = await scraperService.getChapterDetail(task.chapter_url);
 
-    if (!chapterDetail.images || chapterDetail.images.length === 0) {
+    // chapterDetail is an array of { index, download_url }
+    if (!Array.isArray(chapterDetail) || chapterDetail.length === 0) {
       throw new Error('No images found for chapter');
     }
 
     // Step 2: Create ZIP from images via Scraper API
-    taskLog.info({ imageCount: chapterDetail.images.length }, 'Step 2: Creating ZIP');
+    taskLog.info({ imageCount: chapterDetail.length }, 'Step 2: Creating ZIP');
 
-    const imageDataArray = chapterDetail.images.map((url, index) => ({
-      index: index + 1,
-      download_url: url,
-    }));
+    // chapterDetail already has the correct format: { index, download_url }[]
+    const imageDataArray = chapterDetail;
 
     const uploadResult = await scraperService.uploadChapter({
       imageDataArray,
@@ -77,15 +98,19 @@ async function processTask(
       {
         chapter_id: uploaderResult.results.chapter_id,
         chapter_number: task.chapter_number,
-        chapter_title: `Chapter ${task.chapter_number}`,
+        chapter_title: '',
         chapter_images: uploaderResult.results.data,
         path: uploaderResult.results.path,
+        thumbnail_image_url: CONFIG.DEFAULT_THUMBNAIL_URL,
       },
     ]);
+
+    await mangaRepo.incrementBackendChapterStats(manga.id, task.chapter_number);
 
     // Mark completed
     await mangaRepo.updateSyncTaskStatus(task.id, 'completed');
     await mangaRepo.updateMangaSyncProgress(manga.id);
+    await publishSyncProgressEvent(manga);
     debouncedCachePurge(manga.manga_id);
 
     taskLog.info('Chapter synced successfully');
@@ -95,6 +120,7 @@ async function processTask(
 
     await mangaRepo.updateSyncTaskStatus(task.id, 'failed', { error: errMsg });
     await mangaRepo.updateMangaSyncProgress(manga.id);
+    await publishSyncProgressEvent(manga);
   }
 }
 
@@ -109,6 +135,8 @@ async function processManga(
     manga.id,
     CONFIG.DEFAULT_CHAPTERS_PER_MANGA,
   );
+
+  log.info({ mangaId: manga.manga_id, pendingCount: pendingTasks.length }, 'Processing manga tasks');
 
   if (pendingTasks.length === 0) {
     // Check if all tasks are done
@@ -142,6 +170,13 @@ async function processManga(
  * Sync processor tick — processes pending sync tasks for all active manga.
  */
 export async function syncProcessorTick(log: FastifyBaseLogger): Promise<void> {
+  // Resolve manga stuck in 'syncing' after all their tasks have finished.
+  // This runs every tick to catch any that slipped through (e.g. race conditions).
+  const resolved = await mangaRepo.resolveCompletedSyncingManga();
+  if (resolved > 0) {
+    log.info({ resolved }, 'Resolved stuck syncing manga');
+  }
+
   const activeManga = await mangaRepo.getMangaWithActiveTasks();
   if (activeManga.length === 0) return;
 
@@ -150,7 +185,14 @@ export async function syncProcessorTick(log: FastifyBaseLogger): Promise<void> {
   // Process manga concurrently up to limit
   const batch = activeManga.slice(0, CONFIG.MAX_CONCURRENT_SYNCS);
 
-  await Promise.allSettled(
+  const results = await Promise.allSettled(
     batch.map((manga) => processManga(manga, log)),
   );
+
+  // Log any rejected promises
+  for (const [index, result] of results.entries()) {
+    if (result.status === 'rejected') {
+      log.error({ mangaId: batch[index].manga_id, error: result.reason }, 'processManga failed');
+    }
+  }
 }
