@@ -104,7 +104,8 @@ export async function createTokenRequest(
     throw new Error('Ably is not configured');
   }
 
-  const capability: Record<string, string[]> = {};
+  type CapabilityOp = 'subscribe' | 'history' | 'publish' | 'presence';
+  const capability: Record<string, CapabilityOp[]> = {};
 
   if (mangaId) {
     // Scoped to specific manga detail channel
@@ -115,5 +116,7 @@ export async function createTokenRequest(
     capability[`${CONFIG.ABLY_CHANNEL_PREFIX}:detail:*`] = ['subscribe', 'history'];
   }
 
-  return client.auth.createTokenRequest({ capability });
+  return client.auth.createTokenRequest({
+    capability: capability as { [key: string]: CapabilityOp[] | ['*'] },
+  });
 }
