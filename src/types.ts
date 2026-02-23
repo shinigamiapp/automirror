@@ -139,6 +139,7 @@ export interface ScraperChapterListItem {
   title: string;
   url: string;
   date: string;
+  weight?: number;
 }
 
 export interface ScraperChapterListResponse {
@@ -151,12 +152,12 @@ export interface ScraperChapterListResponse {
   data: ScraperChapterListItem[];
 }
 
-export interface ScraperChapterDetailResponse {
-  images: string[];
-  title: string;
-  prevChapter: string | null;
-  nextChapter: string | null;
+export interface ScraperChapterDetailImage {
+  index: number;
+  download_url: string;
 }
+
+export type ScraperChapterDetailResponse = ScraperChapterDetailImage[];
 
 export interface ScraperUploadChapterResponse {
   success: boolean;

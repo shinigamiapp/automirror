@@ -1,0 +1,95 @@
+---
+description: Development context for automirror codebase with proactive MCP tool usage
+alwaysApply: true
+---
+
+# Automirror Development Context
+
+## Project Overview
+
+**automirror** is a TypeScript manga scraping/mirroring service built with:
+- **Fastify** - Web framework with Zod type provider
+- **MySQL** - Database with custom migrations in `src/db/migrations/`
+- **Ably** - Realtime messaging for sync progress updates
+- **Pino** - Structured logging
+- **Vitest** - Testing framework
+
+## Architecture
+
+```
+src/
+├── workers/       # Background processors (scanner, sync-processor, scheduler)
+├── services/      # External integrations (scraper, uploader, realtime, cache, novu)
+├── routes/        # Fastify route handlers
+├── db/            # Database layer (repositories, migrations)
+├── schemas/       # Zod validation schemas
+├── hooks/         # Fastify hooks (auth)
+└── utils/         # Shared utilities (fetch, circuit-breaker)
+```
+
+## Key Patterns
+
+- Repository pattern for database access (`src/db/repositories/`)
+- Worker-based async processing with configurable intervals
+- Circuit breaker for external service resilience
+- Zod schemas for request/response validation
+
+---
+
+# Proactive MCP Tool Usage
+
+## Documentation & Code Generation
+
+Use these MCP tools **automatically** when I need library/API docs, code generation, setup, or configuration—without waiting for explicit requests:
+
+| Need | Tool |
+|------|------|
+| Library docs (Fastify, Zod, Ably, etc.) | `context7` or `Docfork` |
+| API references, tutorials | `context7` → `resolve-library-id` then `get-library-docs` |
+| Current best practices, newer APIs | `exa-mcp` for web search |
+| Package setup/config examples | `Docfork` → `query_docs` |
+
+**Trigger automatically when:**
+- Writing new routes, schemas, or service integrations
+- Configuring libraries or dependencies
+- Debugging unfamiliar APIs
+- Implementing patterns from external libraries
+
+---
+
+# Memory MCP Rules (mem0ai/mem0-memory-mcp)
+
+## Core Behavior
+
+- **Always search before starting**: Call `search_memories` with relevant keywords at task start
+- **Save meaningful context**: After completing tasks, call `add_memory` to persist decisions and patterns
+- **Don't ask what to remember**: Proactively store anything reducing repeated explanations
+
+## What to Save
+
+- User preferences (style, patterns, conventions)
+- Architecture decisions and folder structure
+- Resolved bugs and their solutions
+- Recurring instructions
+
+## What to Search
+
+- At task start: project context, past decisions, preferences
+- When uncertain: search before assuming
+- Familiar problems: search for past solutions
+
+## Tool Usage
+
+| Situation | Tool |
+|---|---|
+| Start of task | `search_memories` |
+| User states preference | `add_memory` |
+| Decision made / bug fixed | `add_memory` |
+| Updating stale info | `update_memory` |
+| Checking stored context | `get_memories` |
+
+## Don'ts
+
+- Don't store trivial/one-off details
+- Don't skip search at task start
+- Don't store sensitive data (keys, passwords, PII)

@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import fastifyCors from '@fastify/cors';
 import fastifySwagger from '@fastify/swagger';
 import scalarReference from '@scalar/fastify-api-reference';
 import {
@@ -27,6 +28,21 @@ export async function buildApp() {
   // Zod type provider
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+
+  // CORS
+  await app.register(fastifyCors, {
+    origin: '*',
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-API-KEY',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+    ],
+  });
 
   // Swagger / OpenAPI
   await app.register(fastifySwagger, {

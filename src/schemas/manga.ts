@@ -23,6 +23,7 @@ export const mangaIdParamSchema = z.object({
 
 export const listMangaQuerySchema = z.object({
   status: z.enum(['idle', 'scanning', 'syncing', 'error']).optional(),
+  title: z.string().min(1).optional(),
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -45,14 +46,14 @@ export const mangaResponseSchema = z.object({
   sync_progress_total: z.number(),
   sync_progress_completed: z.number(),
   sync_progress_failed: z.number(),
-  last_scanned_at: z.string().nullable(),
-  last_synced_at: z.string().nullable(),
-  next_scan_at: z.string().nullable(),
+  last_scanned_at: z.string().datetime().nullable(),
+  last_synced_at: z.string().datetime().nullable(),
+  next_scan_at: z.string().datetime().nullable(),
   last_error: z.string().nullable(),
-  last_error_at: z.string().nullable(),
+  last_error_at: z.string().datetime().nullable(),
   consecutive_failures: z.number(),
-  created_at: z.string(),
-  updated_at: z.string(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
 });
 
 export const bulkCreateMangaSchema = z.object({

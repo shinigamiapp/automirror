@@ -12,6 +12,7 @@ import {
 } from '../schemas/manga.js';
 import * as mangaRepo from '../db/repositories/manga.js';
 import { publishMangaEvent } from '../services/realtime.js';
+import { scanManga } from '../workers/scanner.js';
 
 export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -36,6 +37,11 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const manga = await mangaRepo.createManga(request.body);
+
+      // Trigger immediate scan in background (don't await to avoid blocking response)
+      scanManga(manga, request.log).catch((err) => {
+        request.log.error({ mangaId: manga.manga_id, err }, 'Initial scan failed');
+      });
 
       // Publish realtime event (non-blocking)
       publishMangaEvent(manga.manga_id, 'manga.created', {
@@ -69,8 +75,13 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request) => {
-      const { status, page, page_size } = request.query;
-      const result = await mangaRepo.listManga({ status, page, page_size });
+      const { status, title, page, page_size } = request.query;
+      const result = await mangaRepo.listManga({
+        status,
+        title_query: title,
+        page,
+        page_size,
+      });
       return {
         success: true as const,
         data: { ...result, page, page_size },
@@ -285,9 +296,14 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
           results.push({ manga_id: item.manga_id, status: 'skipped' });
           skipped++;
         } else {
-          await mangaRepo.createManga(item);
+          const manga = await mangaRepo.createManga(item);
           results.push({ manga_id: item.manga_id, status: 'created' });
           created++;
+
+          // Trigger immediate scan in background for each new manga
+          scanManga(manga, _request.log).catch((err) => {
+            _request.log.error({ mangaId: manga.manga_id, err }, 'Initial scan failed');
+          });
         }
       }
 

@@ -1,10 +1,7 @@
-version: '3.8'
-
 services:
   mysql:
-    image: mysql:8.4
+    image: mysql:8.0
     container_name: scraper-worker-mysql
-    command: --default-authentication-plugin=mysql_native_password
     environment:
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-root}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
@@ -15,6 +12,8 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     restart: unless-stopped
+    networks:
+      - automirror-internal
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
@@ -27,9 +26,14 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     environment:
+      # Nginx-proxy & SSL (DNS-01 via acme-companion / Cloudflare)
+      - VIRTUAL_HOST=${VIRTUAL_HOST:-apollo-test.shinigami.io}
+      - VIRTUAL_PORT=3000
+      - LETSENCRYPT_HOST=${LETSENCRYPT_HOST:-apollo-test.shinigami.io}
+      - LETSENCRYPT_TEST=false
       - NODE_ENV=production
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
@@ -54,6 +58,9 @@ services:
       - API_URL=${API_URL}
       - ABLY_API_KEY=${ABLY_API_KEY:-}
       - ABLY_CHANNEL_PREFIX=${ABLY_CHANNEL_PREFIX:-manga}
+    networks:
+      - automirror-internal
+      - proxy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
@@ -61,6 +68,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+networks:
+  automirror-internal:
+    driver: bridge
+  proxy:
+    external: true
 
 volumes:
   mysql_data:

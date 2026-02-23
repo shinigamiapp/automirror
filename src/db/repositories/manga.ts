@@ -3,6 +3,35 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { getDatabase } from '../index.js';
 import type { MangaRegistry, MangaSyncTask } from '../../types.js';
 
+function toMySQLDatetime(isoString: string): string {
+  return new Date(isoString).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function mysqlDateToISO(value: string | null): string | null {
+  if (!value) return null;
+  return new Date(value.replace(' ', 'T') + 'Z').toISOString();
+}
+
+function mapMangaRow(row: RowDataPacket): MangaRegistry {
+  return {
+    ...row,
+    last_scanned_at: mysqlDateToISO(row.last_scanned_at),
+    last_synced_at: mysqlDateToISO(row.last_synced_at),
+    next_scan_at: mysqlDateToISO(row.next_scan_at),
+    last_error_at: mysqlDateToISO(row.last_error_at),
+    created_at: mysqlDateToISO(row.created_at) ?? row.created_at,
+    updated_at: mysqlDateToISO(row.updated_at) ?? row.updated_at,
+  } as MangaRegistry;
+}
+
+function mapSyncTaskRow(row: RowDataPacket): MangaSyncTask {
+  return {
+    ...row,
+    created_at: mysqlDateToISO(row.created_at) ?? row.created_at,
+    updated_at: mysqlDateToISO(row.updated_at) ?? row.updated_at,
+  } as MangaSyncTask;
+}
+
 function extractDomainAndSlug(url: string): { domain: string; slug: string } {
   const parsed = new URL(url);
   const domain = parsed.hostname;
@@ -49,7 +78,7 @@ export async function getMangaById(id: string): Promise<MangaRegistry | undefine
     'SELECT * FROM manga_registry WHERE id = ?',
     [id],
   );
-  return rows[0] as MangaRegistry | undefined;
+  return rows[0] ? mapMangaRow(rows[0]) : undefined;
 }
 
 export async function getMangaByMangaId(mangaId: string): Promise<MangaRegistry | undefined> {
@@ -58,25 +87,39 @@ export async function getMangaByMangaId(mangaId: string): Promise<MangaRegistry 
     'SELECT * FROM manga_registry WHERE manga_id = ?',
     [mangaId],
   );
-  return rows[0] as MangaRegistry | undefined;
+  return rows[0] ? mapMangaRow(rows[0]) : undefined;
 }
 
 export async function listManga(options: {
   status?: string;
+  title_query?: string;
   page: number;
   page_size: number;
 }): Promise<{ manga: MangaRegistry[]; total: number }> {
   const db = getDatabase();
-  const { status, page, page_size } = options;
-  const offset = (page - 1) * page_size;
+  const { status, title_query, page, page_size } = options;
+  const normalizedPage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+  const normalizedPageSize = Number.isFinite(page_size) && page_size > 0
+    ? Math.min(Math.floor(page_size), 100)
+    : 20;
+  const offset = (normalizedPage - 1) * normalizedPageSize;
 
-  let whereClause = '';
+  const whereClauses: string[] = [];
   const params: (string | number)[] = [];
 
   if (status) {
-    whereClause = 'WHERE status = ?';
+    whereClauses.push('status = ?');
     params.push(status);
   }
+
+  if (title_query && title_query.trim().length > 0) {
+    whereClauses.push('series_title LIKE ?');
+    params.push(`%${title_query.trim()}%`);
+  }
+
+  const whereClause = whereClauses.length > 0
+    ? `WHERE ${whereClauses.join(' AND ')}`
+    : '';
 
   const [countRows] = await db.execute<RowDataPacket[]>(
     `SELECT COUNT(*) as count FROM manga_registry ${whereClause}`,
@@ -85,11 +128,11 @@ export async function listManga(options: {
   const total = Number(countRows[0].count);
 
   const [rows] = await db.execute<RowDataPacket[]>(
-    `SELECT * FROM manga_registry ${whereClause} ORDER BY priority DESC, created_at DESC LIMIT ? OFFSET ?`,
-    [...params, page_size, offset],
+    `SELECT * FROM manga_registry ${whereClause} ORDER BY priority DESC, created_at DESC LIMIT ${normalizedPageSize} OFFSET ${offset}`,
+    params,
   );
 
-  return { manga: rows as MangaRegistry[], total };
+  return { manga: rows.map((r: RowDataPacket) => mapMangaRow(r)), total };
 }
 
 export async function updateManga(
@@ -185,7 +228,8 @@ export async function updateMangaScanResult(
      SET source_chapter_count = ?, source_last_chapter = ?,
          last_scanned_at = NOW(), next_scan_at = ?,
          consecutive_failures = 0, last_error = NULL,
-         status = 'idle', updated_at = NOW()
+         status = IF(status = 'scanning', 'idle', status),
+         updated_at = NOW()
      WHERE id = ?`,
     [data.source_chapter_count, data.source_last_chapter, data.next_scan_at, id],
   );
@@ -218,7 +262,7 @@ export async function getDueManga(): Promise<MangaRegistry[]> {
       AND (next_scan_at IS NULL OR next_scan_at <= NOW())
     ORDER BY priority DESC, next_scan_at ASC
   `);
-  return rows as MangaRegistry[];
+  return rows.map((r: RowDataPacket) => mapMangaRow(r));
 }
 
 export async function updateDomain(oldDomain: string, newDomain: string): Promise<number> {
@@ -269,10 +313,10 @@ export async function getPendingSyncTasks(
     `SELECT * FROM manga_sync_tasks
      WHERE manga_registry_id = ? AND status = 'pending'
      ORDER BY weight ASC
-     LIMIT ?`,
-    [mangaRegistryId, limit],
+     LIMIT ${Math.floor(limit)}`,
+    [mangaRegistryId],
   );
-  return rows as MangaSyncTask[];
+  return rows.map((r: RowDataPacket) => mapSyncTaskRow(r));
 }
 
 export async function getSyncTasksByManga(mangaRegistryId: string): Promise<MangaSyncTask[]> {
@@ -281,7 +325,7 @@ export async function getSyncTasksByManga(mangaRegistryId: string): Promise<Mang
     'SELECT * FROM manga_sync_tasks WHERE manga_registry_id = ? ORDER BY weight ASC',
     [mangaRegistryId],
   );
-  return rows as MangaSyncTask[];
+  return rows.map((r: RowDataPacket) => mapSyncTaskRow(r));
 }
 
 export async function getFailedSyncTasks(mangaRegistryId: string): Promise<MangaSyncTask[]> {
@@ -290,7 +334,7 @@ export async function getFailedSyncTasks(mangaRegistryId: string): Promise<Manga
     "SELECT * FROM manga_sync_tasks WHERE manga_registry_id = ? AND status = 'failed' ORDER BY weight ASC",
     [mangaRegistryId],
   );
-  return rows as MangaSyncTask[];
+  return rows.map((r: RowDataPacket) => mapSyncTaskRow(r));
 }
 
 export async function updateSyncTaskStatus(
@@ -355,7 +399,7 @@ export async function getMangaWithActiveTasks(): Promise<MangaRegistry[]> {
       )
     ORDER BY mr.priority DESC
   `);
-  return rows as MangaRegistry[];
+  return rows.map((r: RowDataPacket) => mapMangaRow(r));
 }
 
 export async function triggerForceScan(id: string): Promise<void> {
@@ -387,4 +431,48 @@ export async function updateLastSyncedAt(id: string): Promise<void> {
      WHERE id = ?`,
     [id],
   );
+}
+
+export async function updateBackendChapterStats(
+  id: string,
+  data: { backend_chapter_count: number; backend_last_chapter: number | null },
+): Promise<void> {
+  const db = getDatabase();
+  await db.execute(
+    `UPDATE manga_registry SET backend_chapter_count = ?, backend_last_chapter = ?, updated_at = NOW() WHERE id = ?`,
+    [data.backend_chapter_count, data.backend_last_chapter, id],
+  );
+}
+
+export async function incrementBackendChapterStats(
+  id: string,
+  chapterNumber: number,
+): Promise<void> {
+  const db = getDatabase();
+  await db.execute(
+    `UPDATE manga_registry
+     SET backend_chapter_count = backend_chapter_count + 1,
+         backend_last_chapter = GREATEST(COALESCE(backend_last_chapter, 0), ?),
+         updated_at = NOW()
+     WHERE id = ?`,
+    [chapterNumber, id],
+  );
+}
+
+export async function resolveCompletedSyncingManga(): Promise<number> {
+  const db = getDatabase();
+  const [errorResult] = await db.execute<ResultSetHeader>(
+    `UPDATE manga_registry
+     SET status = 'error', last_error = 'Some chapters failed to sync', updated_at = NOW()
+     WHERE status = 'syncing'
+       AND NOT EXISTS (SELECT 1 FROM manga_sync_tasks WHERE manga_registry_id = manga_registry.id AND status IN ('pending', 'scraping', 'scraped', 'uploading'))
+       AND EXISTS (SELECT 1 FROM manga_sync_tasks WHERE manga_registry_id = manga_registry.id AND status = 'failed')`,
+  );
+  const [idleResult] = await db.execute<ResultSetHeader>(
+    `UPDATE manga_registry
+     SET status = 'idle', last_synced_at = COALESCE(last_synced_at, NOW()), updated_at = NOW()
+     WHERE status = 'syncing'
+       AND NOT EXISTS (SELECT 1 FROM manga_sync_tasks WHERE manga_registry_id = manga_registry.id AND status IN ('pending', 'scraping', 'scraped', 'uploading', 'failed'))`,
+  );
+  return errorResult.affectedRows + idleResult.affectedRows;
 }

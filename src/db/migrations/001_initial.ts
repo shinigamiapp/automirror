@@ -1,5 +1,15 @@
 import type { Pool } from 'mysql2/promise';
 
+async function createIndexIfNotExists(pool: Pool, sql: string): Promise<void> {
+  try {
+    await pool.execute(sql);
+  } catch (error: unknown) {
+    const mysqlError = error as { code?: string; errno?: number };
+    if (mysqlError.code === 'ER_DUP_KEYNAME' || mysqlError.errno === 1061) return;
+    throw error;
+  }
+}
+
 export async function runMigrations(pool: Pool): Promise<void> {
   // Manga Registry (Primary - Single Source of Truth)
   await pool.execute(`
@@ -39,18 +49,18 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ) ENGINE=InnoDB
   `);
 
-  await pool.execute(`
-    CREATE INDEX IF NOT EXISTS idx_manga_registry_domain_slug
+  await createIndexIfNotExists(pool, `
+    CREATE INDEX idx_manga_registry_domain_slug
       ON manga_registry(source_domain, manga_slug)
   `);
 
-  await pool.execute(`
-    CREATE INDEX IF NOT EXISTS idx_manga_registry_scan
+  await createIndexIfNotExists(pool, `
+    CREATE INDEX idx_manga_registry_scan
       ON manga_registry(auto_sync_enabled, next_scan_at)
   `);
 
-  await pool.execute(`
-    CREATE INDEX IF NOT EXISTS idx_manga_registry_status
+  await createIndexIfNotExists(pool, `
+    CREATE INDEX idx_manga_registry_status
       ON manga_registry(status)
   `);
 
@@ -76,13 +86,13 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ) ENGINE=InnoDB
   `);
 
-  await pool.execute(`
-    CREATE INDEX IF NOT EXISTS idx_sync_tasks_manga
+  await createIndexIfNotExists(pool, `
+    CREATE INDEX idx_sync_tasks_manga
       ON manga_sync_tasks(manga_registry_id)
   `);
 
-  await pool.execute(`
-    CREATE INDEX IF NOT EXISTS idx_sync_tasks_status
+  await createIndexIfNotExists(pool, `
+    CREATE INDEX idx_sync_tasks_status
       ON manga_sync_tasks(manga_registry_id, status, weight)
   `);
 

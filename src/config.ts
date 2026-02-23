@@ -18,6 +18,7 @@ export const CONFIG = {
   CACHE_PURGE_URL: process.env.CACHE_PURGE_URL || 'http://localhost:3004',
   API_URL: process.env.API_URL || `http://localhost:${process.env.PORT || '3000'}`,
   DASHBOARD_URL: process.env.DASHBOARD_URL || 'http://localhost:3000',
+  DEFAULT_THUMBNAIL_URL: process.env.DEFAULT_THUMBNAIL_URL || 'https://assets.shngm.id/thumbnail/image/default.jpg',
 
   // Scraper Host Pool
   SCRAPER_HOSTS: process.env.SCRAPER_HOSTS || process.env.SCRAPER_BASE_URL || 'http://localhost:3001',

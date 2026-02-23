@@ -7,7 +7,14 @@ import { publishMangaEvent } from '../services/realtime.js';
 import type { MangaRegistry, ScraperChapterListItem } from '../types.js';
 
 /**
- * Parse chapter number from a chapter title/url string.
+ * Format a Date to MySQL DATETIME format (YYYY-MM-DD HH:MM:SS)
+ */
+function toMySQLDatetime(date: Date): string {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+/**
+ * Parse chapter number from a chapter title string.
  * e.g. "Chapter 26" -> 26, "Chapter 26.5" -> 26.5
  */
 function parseChapterNumber(title: string): number {
@@ -16,13 +23,27 @@ function parseChapterNumber(title: string): number {
 }
 
 /**
+ * Extract chapter number from a scraper chapter item.
+ * Priority: URL path segment > weight > title parse.
+ * Chapters with special titles (e.g. "SIDE 1", "END") can have wrong numbers
+ * if parsed from the title alone — the URL is the authoritative source.
+ */
+function getChapterNumber(ch: { title: string; url: string; weight?: number }): number {
+  const urlMatch = ch.url.match(/\/chapter\/(\d+(?:\.\d+)?)\/?$/);
+  if (urlMatch) return parseFloat(urlMatch[1]);
+  if (ch.weight !== undefined && ch.weight >= 0) return ch.weight;
+  return parseChapterNumber(ch.title);
+}
+
+/**
  * Scanner worker — checks for new chapters using metadata-first optimization.
  *
  * Flow:
  * 1. Quick metadata check (GET /manga/detail) — O(1)
- * 2. If no new chapters → skip, just update next_scan_at
- * 3. If new chapters → fetch full chapter list + backend chapters
- * 4. Create sync tasks for missing chapters
+ * 2. Fetch backend chapter count for comparison
+ * 3. If no new or missing chapters → skip, just update next_scan_at
+ * 4. If new/missing chapters → fetch full chapter list + backend chapters
+ * 5. Create sync tasks for missing chapters
  */
 export async function scanManga(
   manga: MangaRegistry,
@@ -45,19 +66,33 @@ export async function scanManga(
     const sourceLastChapter = detail.chapterSummary.lastChapter.number;
     const sourceTotal = detail.chapterSummary.total;
 
-    // Step 2: Skip if no new chapters
+    // Fetch backend chapter count for comparison
+    const existingChapterNumbers = await backendService.getAllChapterNumbers(manga.manga_id);
+    const backendCount = existingChapterNumbers.size;
+    const backendLastChapter = backendCount > 0
+      ? Math.max(...existingChapterNumbers)
+      : null;
+
+    await mangaRepo.updateBackendChapterStats(manga.id, {
+      backend_chapter_count: backendCount,
+      backend_last_chapter: backendLastChapter,
+    });
+
+    // Step 2: Skip only if last chapter is same AND chapter counts match
+    // If counts differ, there might be missing chapters in the middle
     if (
       manga.source_last_chapter !== null &&
-      sourceLastChapter <= manga.source_last_chapter
+      sourceLastChapter <= manga.source_last_chapter &&
+      sourceTotal === backendCount
     ) {
       log.info(
-        { mangaId: manga.manga_id, lastChapter: sourceLastChapter },
-        'No new chapters found, skipping full scan',
+        { mangaId: manga.manga_id, lastChapter: sourceLastChapter, sourceTotal, backendCount },
+        'No new or missing chapters found, skipping full scan',
       );
 
-      const nextScan = new Date(
+      const nextScan = toMySQLDatetime(new Date(
         Date.now() + manga.check_interval_minutes * 60_000,
-      ).toISOString();
+      ));
 
       await mangaRepo.updateMangaScanResult(manga.id, {
         source_chapter_count: sourceTotal,
@@ -72,28 +107,27 @@ export async function scanManga(
         mangaId: manga.manga_id,
         sourceLastChapter,
         knownLastChapter: manga.source_last_chapter,
+        sourceTotal,
+        backendCount,
       },
-      'New chapters detected, fetching full chapter list',
+      'New or missing chapters detected, fetching full chapter list',
     );
 
     // Step 3: Fetch full chapter list from source
     const sourceChapters = await scraperService.getAllChapters(manga.manga_url);
 
-    // Fetch all existing backend chapters
-    const existingChapterNumbers = await backendService.getAllChapterNumbers(manga.manga_id);
-
-    // Step 4: Find missing chapters
+    // Step 4: Find missing chapters (using already fetched backend chapters)
     const missingChapters = sourceChapters.filter((ch) => {
-      const num = parseChapterNumber(ch.title);
-      return num > 0 && !existingChapterNumbers.has(num);
+      const num = getChapterNumber(ch);
+      return !existingChapterNumbers.has(num);
     });
 
     if (missingChapters.length === 0) {
       log.info({ mangaId: manga.manga_id }, 'All chapters already synced');
 
-      const nextScan = new Date(
+      const nextScan = toMySQLDatetime(new Date(
         Date.now() + manga.check_interval_minutes * 60_000,
-      ).toISOString();
+      ));
 
       await mangaRepo.updateMangaScanResult(manga.id, {
         source_chapter_count: sourceTotal,
@@ -113,15 +147,15 @@ export async function scanManga(
       manga.id,
       missingChapters.map((ch: ScraperChapterListItem, index: number) => ({
         chapter_url: ch.url,
-        chapter_number: parseChapterNumber(ch.title),
+        chapter_number: getChapterNumber(ch),
         weight: index,
       })),
     );
 
     // Update manga state
-    const nextScan = new Date(
+    const nextScan = toMySQLDatetime(new Date(
       Date.now() + manga.check_interval_minutes * 60_000,
-    ).toISOString();
+    ));
 
     await mangaRepo.updateMangaScanResult(manga.id, {
       source_chapter_count: sourceTotal,
