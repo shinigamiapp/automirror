@@ -34,7 +34,7 @@ export async function createManga(data: {
       domain,
       slug,
       data.series_title,
-      data.check_interval_minutes ?? 360,
+      data.check_interval_minutes ?? 20,
       data.priority ?? 0,
       data.auto_sync_enabled === false ? 0 : 1,
     ],

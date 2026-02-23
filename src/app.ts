@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { CONFIG } from './config.js';
 import { mangaRoutes } from './routes/manga.js';
 import { webhooksRoutes } from './routes/webhooks.js';
+import { realtimeRoutes } from './routes/realtime.js';
 import { requireApiKey } from './hooks/auth.js';
 
 export async function buildApp() {
@@ -36,10 +37,11 @@ export async function buildApp() {
         version: '3.0.0',
       },
       servers: [
-        { url: `http://localhost:${CONFIG.PORT}`, description: 'Development' },
+        { url: CONFIG.API_URL, description: 'API Server' },
       ],
       tags: [
         { name: 'manga', description: 'Manga registry and auto-sync' },
+        { name: 'realtime', description: 'Ably realtime authentication' },
         { name: 'health', description: 'Health and status' },
       ],
       components: {
@@ -67,6 +69,9 @@ export async function buildApp() {
   }, { prefix: '/manga' });
 
   await app.register(webhooksRoutes, { prefix: '/webhooks' });
+
+  // Realtime routes (no auth required - frontend needs unauthenticated access for token requests)
+  await app.register(realtimeRoutes, { prefix: '/realtime' });
 
   // Health check
   app.get('/health', {

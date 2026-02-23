@@ -5,6 +5,7 @@ import * as scraperService from '../services/scraper.js';
 import * as uploaderService from '../services/uploader.js';
 import * as backendService from '../services/backend.js';
 import { debouncedCachePurge } from '../services/cache.js';
+import { publishMangaEvent } from '../services/realtime.js';
 import type { MangaRegistry, MangaSyncTask } from '../types.js';
 
 /**
@@ -88,6 +89,13 @@ async function processTask(
     await mangaRepo.updateMangaSyncProgress(manga.id);
     debouncedCachePurge(manga.manga_id);
 
+    // Publish sync progress event (non-blocking)
+    publishMangaEvent(manga.manga_id, 'manga.sync.progress', {
+      id: manga.id,
+      chapter_number: task.chapter_number,
+      status: 'completed',
+    }).catch(() => {});
+
     taskLog.info('Chapter synced successfully');
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -95,6 +103,14 @@ async function processTask(
 
     await mangaRepo.updateSyncTaskStatus(task.id, 'failed', { error: errMsg });
     await mangaRepo.updateMangaSyncProgress(manga.id);
+
+    // Publish sync progress event (non-blocking)
+    publishMangaEvent(manga.manga_id, 'manga.sync.progress', {
+      id: manga.id,
+      chapter_number: task.chapter_number,
+      status: 'failed',
+      error: errMsg,
+    }).catch(() => {});
   }
 }
 

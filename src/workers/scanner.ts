@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import * as mangaRepo from '../db/repositories/manga.js';
 import * as scraperService from '../services/scraper.js';
 import * as backendService from '../services/backend.js';
+import { publishMangaEvent } from '../services/realtime.js';
 import type { MangaRegistry, ScraperChapterListItem } from '../types.js';
 
 /**
@@ -30,6 +31,13 @@ export async function scanManga(
   log.info({ mangaId: manga.manga_id, title: manga.series_title }, 'Scanning manga');
 
   await mangaRepo.updateMangaStatus(manga.id, 'scanning');
+
+  // Publish scan started event (non-blocking)
+  publishMangaEvent(manga.manga_id, 'manga.scan.started', {
+    id: manga.id,
+    series_title: manga.series_title,
+    status: 'scanning',
+  }).catch(() => {});
 
   try {
     // Step 1: Quick metadata check
@@ -126,10 +134,28 @@ export async function scanManga(
 
     // Update progress totals
     await mangaRepo.incrementSyncProgressTotal(manga.id, missingChapters.length);
+
+    // Publish scan finished event with syncing status (non-blocking)
+    publishMangaEvent(manga.manga_id, 'manga.scan.finished', {
+      id: manga.id,
+      series_title: manga.series_title,
+      status: 'syncing',
+      source_chapter_count: sourceTotal,
+      source_last_chapter: sourceLastChapter,
+      missing_chapters: missingChapters.length,
+    }).catch(() => {});
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     log.error({ mangaId: manga.manga_id, err: error }, 'Scan failed');
     await mangaRepo.updateMangaStatus(manga.id, 'error', errMsg);
+
+    // Publish scan finished event with error status (non-blocking)
+    publishMangaEvent(manga.manga_id, 'manga.scan.finished', {
+      id: manga.id,
+      series_title: manga.series_title,
+      status: 'error',
+      error: errMsg,
+    }).catch(() => {});
   }
 }
 

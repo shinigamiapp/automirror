@@ -37,6 +37,10 @@ services:
       - MYSQL_USER=${MYSQL_USER:-scraper}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
       - SCRAPER_BASE_URL=${SCRAPER_BASE_URL}
+      - SCRAPER_HOSTS=${SCRAPER_HOSTS:-${SCRAPER_BASE_URL}}
+      - SCRAPER_STRATEGY=${SCRAPER_STRATEGY:-round_robin}
+      - SCRAPER_HOST_TIMEOUT_MS=${SCRAPER_HOST_TIMEOUT_MS:-30000}
+      - SCRAPER_HOST_MAX_FAILURES=${SCRAPER_HOST_MAX_FAILURES:-3}
       - UPLOADER_BASE_URL=${UPLOADER_BASE_URL}
       - BACKEND_API_URL=${BACKEND_API_URL}
       - BACKEND_API_KEY=${BACKEND_API_KEY}
@@ -48,6 +52,8 @@ services:
       - NOVU_SUBSCRIBER_ID=${NOVU_SUBSCRIBER_ID}
       - DASHBOARD_URL=${DASHBOARD_URL}
       - API_URL=${API_URL}
+      - ABLY_API_KEY=${ABLY_API_KEY:-}
+      - ABLY_CHANNEL_PREFIX=${ABLY_CHANNEL_PREFIX:-manga}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]

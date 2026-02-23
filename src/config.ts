@@ -16,8 +16,19 @@ export const CONFIG = {
   UPLOADER_BASE_URL: process.env.UPLOADER_BASE_URL || 'http://localhost:3002',
   BACKEND_API_URL: process.env.BACKEND_API_URL || 'http://localhost:3003',
   CACHE_PURGE_URL: process.env.CACHE_PURGE_URL || 'http://localhost:3004',
-  API_URL: process.env.API_URL || 'http://localhost:3004',
+  API_URL: process.env.API_URL || `http://localhost:${process.env.PORT || '3000'}`,
   DASHBOARD_URL: process.env.DASHBOARD_URL || 'http://localhost:3000',
+
+  // Scraper Host Pool
+  SCRAPER_HOSTS: process.env.SCRAPER_HOSTS || process.env.SCRAPER_BASE_URL || 'http://localhost:3001',
+  SCRAPER_STRATEGY: (process.env.SCRAPER_STRATEGY || 'round_robin') as 'round_robin' | 'failover',
+  SCRAPER_HOST_TIMEOUT_MS: parseInt(process.env.SCRAPER_HOST_TIMEOUT_MS || '30000', 10),
+  SCRAPER_HOST_MAX_FAILURES: parseInt(process.env.SCRAPER_HOST_MAX_FAILURES || '3', 10),
+
+  // Ably Realtime
+  ABLY_API_KEY: process.env.ABLY_API_KEY || '',
+  ABLY_CHANNEL_PREFIX: process.env.ABLY_CHANNEL_PREFIX || 'manga',
+
   // API Keys
   ADMIN_API_KEY: process.env.ADMIN_API_KEY || '',
   UPLOADER_API_KEY: process.env.UPLOADER_API_KEY || '',

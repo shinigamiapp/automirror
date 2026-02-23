@@ -4,7 +4,7 @@ export const createMangaSchema = z.object({
   manga_id: z.string().min(1),
   manga_url: z.string().url(),
   series_title: z.string().min(1),
-  check_interval_minutes: z.number().int().min(1).default(360),
+  check_interval_minutes: z.number().int().min(1).default(20),
   priority: z.number().int().min(0).default(0),
   auto_sync_enabled: z.boolean().default(true),
 });

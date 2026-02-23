@@ -11,6 +11,7 @@ import {
   updateDomainSchema,
 } from '../schemas/manga.js';
 import * as mangaRepo from '../db/repositories/manga.js';
+import { publishMangaEvent } from '../services/realtime.js';
 
 export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
@@ -35,6 +36,14 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const manga = await mangaRepo.createManga(request.body);
+
+      // Publish realtime event (non-blocking)
+      publishMangaEvent(manga.manga_id, 'manga.created', {
+        id: manga.id,
+        series_title: manga.series_title,
+        status: manga.status,
+      }).catch(() => {});
+
       return reply.code(201).send({ success: true, data: manga });
     },
   });
@@ -135,6 +144,15 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       if (!updated) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
+
+      // Publish realtime event (non-blocking)
+      publishMangaEvent(updated.manga_id, 'manga.updated', {
+        id: updated.id,
+        series_title: updated.series_title,
+        status: updated.status,
+        auto_sync_enabled: updated.auto_sync_enabled,
+      }).catch(() => {});
+
       return { success: true as const, data: updated };
     },
   });
@@ -153,10 +171,23 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
+      // Get manga details before deletion for the event
+      const manga = await mangaRepo.getMangaById(request.params.id);
+      if (!manga) {
+        return reply.code(404).send({ success: false, error: 'Manga not found' });
+      }
+
       const deleted = await mangaRepo.deleteManga(request.params.id);
       if (!deleted) {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
+
+      // Publish realtime event (non-blocking)
+      publishMangaEvent(manga.manga_id, 'manga.deleted', {
+        id: manga.id,
+        series_title: manga.series_title,
+      }).catch(() => {});
+
       return { success: true as const, message: 'Manga removed from registry' };
     },
   });
