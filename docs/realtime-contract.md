@@ -2,6 +2,15 @@
 
 This document describes the Ably realtime integration for live manga updates.
 
+## Environment Configuration
+
+| Variable               | Default   | Description                                      |
+| ---------------------- | --------- | ------------------------------------------------ |
+| `ABLY_API_KEY`         | —         | Ably API key (required to enable realtime)       |
+| `ABLY_CHANNEL_PREFIX`  | `manga`   | Prefix for all Ably channel names                |
+
+---
+
 ## Authentication
 
 ### GET /realtime/auth
@@ -13,6 +22,15 @@ Get an Ably token request for frontend authentication.
 | Parameter  | Type   | Required | Description                                      |
 | ---------- | ------ | -------- | ------------------------------------------------ |
 | `manga_id` | string | No       | Scope token to a specific manga's detail channel |
+
+**Token Capabilities:**
+
+| Scope              | Operations granted          |
+| ------------------ | --------------------------- |
+| Unscoped           | `subscribe`, `history` on `{prefix}:list` and `{prefix}:detail:*` |
+| Scoped (`manga_id`)| `subscribe`, `history` on `{prefix}:detail:{manga_id}` only |
+
+The `history` capability allows clients to replay recent missed messages via `channel.history()`.
 
 **Response (200):**
 
@@ -59,7 +77,17 @@ The prefix (`manga`) is configurable via `ABLY_CHANNEL_PREFIX` env var.
 
 ---
 
-## Event Types
+## Event Payloads
+
+Events are published to **both** `manga:list` and `manga:detail:{manga_id}` simultaneously.
+
+**Payload shape differs by channel:**
+- **`manga:list`** — includes `manga_id` field (needed to identify which manga the event belongs to)
+- **`manga:detail:{manga_id}`** — omits `manga_id` (already encoded in the channel name)
+
+The payload examples below show the **list channel** shape (with `manga_id`). Strip `manga_id` for the equivalent detail channel payload.
+
+---
 
 ### manga.created
 
@@ -77,6 +105,8 @@ Published when a new manga is registered.
   "status": "idle"
 }
 ```
+
+---
 
 ### manga.updated
 
@@ -96,6 +126,8 @@ Published when manga settings are updated.
 }
 ```
 
+---
+
 ### manga.deleted
 
 Published when a manga is removed from registry.
@@ -111,6 +143,8 @@ Published when a manga is removed from registry.
   "series_title": "One Piece"
 }
 ```
+
+---
 
 ### manga.scan.started
 
@@ -129,13 +163,15 @@ Published when a manga scan begins.
 }
 ```
 
+---
+
 ### manga.scan.finished
 
 Published when a manga scan completes (success or error).
 
 **Channels:** `manga:list`, `manga:detail:{manga_id}`
 
-**Payload (success):**
+**Payload (success — chapters found):**
 
 ```json
 {
@@ -160,6 +196,8 @@ Published when a manga scan completes (success or error).
   "error": "Failed to fetch chapter list"
 }
 ```
+
+---
 
 ### manga.sync.progress
 
@@ -204,9 +242,11 @@ npm install ably
 
 ```typescript
 import Ably from 'ably';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
 const API_URL = 'https://your-api.example.com';
+// Channel prefix must match ABLY_CHANNEL_PREFIX on the server (default: 'manga')
+const CHANNEL_PREFIX = 'manga';
 
 // Create Ably client with token auth
 const ably = new Ably.Realtime({
@@ -228,7 +268,7 @@ const ably = new Ably.Realtime({
 // Hook to subscribe to manga list updates
 export function useMangaListUpdates(onEvent: (event: string, data: any) => void) {
   useEffect(() => {
-    const channel = ably.channels.get('manga:list');
+    const channel = ably.channels.get(`${CHANNEL_PREFIX}:list`);
 
     const listener = (message: Ably.Message) => {
       onEvent(message.name, message.data);
@@ -248,7 +288,7 @@ export function useMangaDetailUpdates(
   onEvent: (event: string, data: any) => void,
 ) {
   useEffect(() => {
-    const channel = ably.channels.get(`manga:detail:${mangaId}`);
+    const channel = ably.channels.get(`${CHANNEL_PREFIX}:detail:${mangaId}`);
 
     const listener = (message: Ably.Message) => {
       onEvent(message.name, message.data);
@@ -264,20 +304,17 @@ export function useMangaDetailUpdates(
 
 // Example component
 function MangaList() {
-  const [manga, setManga] = useState<any[]>([]);
-
   useMangaListUpdates((event, data) => {
-    console.log('Received event:', event, data);
-
     switch (event) {
       case 'manga.created':
-        // Refresh list or add to state
+        // data.manga_id identifies which manga was added
         break;
       case 'manga.scan.finished':
-        // Update manga status in list
+        // data.status: 'syncing' | 'error'
+        // data.missing_chapters available on success
         break;
       case 'manga.sync.progress':
-        // Update sync progress indicator
+        // data.chapter_number, data.status: 'completed' | 'failed'
         break;
     }
   });
@@ -286,12 +323,24 @@ function MangaList() {
 }
 ```
 
-### Scoped Token (Single Manga)
+### Replaying Missed Events (History)
 
-For detail pages, request a scoped token to limit access:
+Tokens grant `history` access. Use `channel.history()` to catch up on events missed while offline:
+
+```typescript
+const channel = ably.channels.get(`${CHANNEL_PREFIX}:list`);
+const page = await channel.history({ limit: 50 });
+for (const message of page.items) {
+  console.log(message.name, message.data);
+}
+```
+
+### Scoped Token (Single Manga Detail Page)
+
+For detail pages, request a scoped token to limit access to a single channel:
 
 ```typescript
 const res = await fetch(`${API_URL}/realtime/auth?manga_id=${mangaId}`);
 ```
 
-This returns a token that only has access to `manga:detail:{manga_id}`.
+This returns a token with `subscribe` + `history` access to `{prefix}:detail:{manga_id}` only.

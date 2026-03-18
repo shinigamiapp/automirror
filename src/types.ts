@@ -157,6 +157,7 @@ export interface ScraperChapterDetailImage {
   download_url: string;
 }
 
+// The API returns an array directly, not wrapped in an object
 export type ScraperChapterDetailResponse = ScraperChapterDetailImage[];
 
 export interface ScraperUploadChapterResponse {

@@ -1,79 +1,60 @@
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: scraper-worker-mysql
-    environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-root}
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
-      - MYSQL_USER=${MYSQL_USER:-scraper}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    restart: unless-stopped
-    networks:
-      - automirror-internal
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
   scraper-worker:
     build: .
-    depends_on:
-      mysql:
-        condition: service_healthy
     expose:
       - "3000"
     environment:
-      # Nginx-proxy & SSL (DNS-01 via acme-companion / Cloudflare)
-      - VIRTUAL_HOST=${VIRTUAL_HOST:-apollo-test.shinigami.io}
+      # Nginx-proxy & SSL
+      - VIRTUAL_HOST=${VIRTUAL_HOST:-apollo.shinigami.io}
       - VIRTUAL_PORT=3000
-      - LETSENCRYPT_HOST=${LETSENCRYPT_HOST:-apollo-test.shinigami.io}
+      - LETSENCRYPT_HOST=${LETSENCRYPT_HOST:-apollo.shinigami.io}
       - LETSENCRYPT_TEST=false
       - NODE_ENV=production
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-scraper_worker}
-      - MYSQL_USER=${MYSQL_USER:-scraper}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-scraper_password}
-      - SCRAPER_BASE_URL=${SCRAPER_BASE_URL}
-      - SCRAPER_HOSTS=${SCRAPER_HOSTS:-${SCRAPER_BASE_URL}}
-      - SCRAPER_STRATEGY=${SCRAPER_STRATEGY:-round_robin}
-      - SCRAPER_HOST_TIMEOUT_MS=${SCRAPER_HOST_TIMEOUT_MS:-30000}
-      - SCRAPER_HOST_MAX_FAILURES=${SCRAPER_HOST_MAX_FAILURES:-3}
-      - UPLOADER_BASE_URL=${UPLOADER_BASE_URL}
-      - BACKEND_API_URL=${BACKEND_API_URL}
-      - BACKEND_API_KEY=${BACKEND_API_KEY}
-      - CACHE_PURGE_URL=${CACHE_PURGE_URL}
-      - CACHE_PURGE_API_KEY=${CACHE_PURGE_API_KEY}
-      - ADMIN_API_KEY=${ADMIN_API_KEY}
-      - UPLOADER_API_KEY=${UPLOADER_API_KEY}
-      - NOVU_API_KEY=${NOVU_API_KEY}
-      - NOVU_SUBSCRIBER_ID=${NOVU_SUBSCRIBER_ID}
-      - DASHBOARD_URL=${DASHBOARD_URL}
-      - API_URL=${API_URL}
-      - ABLY_API_KEY=${ABLY_API_KEY:-}
-      - ABLY_CHANNEL_PREFIX=${ABLY_CHANNEL_PREFIX:-manga}
-    networks:
-      - automirror-internal
-      - proxy
+      # MySQL (local — intentionally kept out of Doppler)
+      - MYSQL_HOST=${MYSQL_HOST:-mysql}
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-automirror}
+      - MYSQL_USER=${MYSQL_USER:-automirror}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      # Doppler injects all remaining secrets at container startup
+      - DOPPLER_TOKEN=${DOPPLER_TOKEN}
     restart: unless-stopped
+    networks:
+      - db-network
+      - proxy-network
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 20s
 
+  db-backup:
+    image: ghcr.io/realorangeone/db-auto-backup:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - db_backups:/var/backups
+    environment:
+      - SCHEDULE=0 * * * *
+      - COMPRESSION=gzip
+    restart: unless-stopped
+
+  db-sync:
+    build: ./backup
+    depends_on:
+      - db-backup
+    volumes:
+      - db_backups:/var/backups:ro
+    environment:
+      # Doppler injects R2 credentials and backup config at container startup
+      - DOPPLER_TOKEN=${DOPPLER_TOKEN}
+    restart: unless-stopped
+
 networks:
-  automirror-internal:
-    driver: bridge
-  proxy:
+  db-network:
+    external: true
+  proxy-network:
     external: true
 
 volumes:
-  mysql_data:
+  db_backups:

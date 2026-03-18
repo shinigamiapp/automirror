@@ -9,9 +9,11 @@ import {
   mangaResponseSchema,
   bulkCreateMangaSchema,
   updateDomainSchema,
+  unauthorizedResponseSchema,
+  internalErrorResponseSchema,
 } from '../schemas/manga.js';
 import * as mangaRepo from '../db/repositories/manga.js';
-import { publishMangaEvent } from '../services/realtime.js';
+import { publishMangaEvent, toRealtimePayload } from '../services/realtime.js';
 import { scanManga } from '../workers/scanner.js';
 
 export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
@@ -24,10 +26,13 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'Register a manga for auto-sync',
+      security: [{ apiKey: [] }],
       body: createMangaSchema,
       response: {
         201: z.object({ success: z.literal(true), data: mangaResponseSchema }),
+        401: unauthorizedResponseSchema,
         409: z.object({ success: z.literal(false), error: z.string() }),
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (request, reply) => {
@@ -43,12 +48,8 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
         request.log.error({ mangaId: manga.manga_id, err }, 'Initial scan failed');
       });
 
-      // Publish realtime event (non-blocking)
-      publishMangaEvent(manga.manga_id, 'manga.created', {
-        id: manga.id,
-        series_title: manga.series_title,
-        status: manga.status,
-      }).catch(() => {});
+      // Publish realtime event with enriched payload (non-blocking)
+      publishMangaEvent(manga.manga_id, 'manga.created', toRealtimePayload(manga)).catch(() => {});
 
       return reply.code(201).send({ success: true, data: manga });
     },
@@ -61,6 +62,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'List all registered manga',
+      security: [{ apiKey: [] }],
       querystring: listMangaQuerySchema,
       response: {
         200: z.object({
@@ -72,13 +74,18 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
             page_size: z.number(),
           }),
         }),
+        401: unauthorizedResponseSchema,
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (request) => {
-      const { status, title, page, page_size } = request.query;
+      const { status, title, domain, sort_by, sort_order, page, page_size } = request.query;
       const result = await mangaRepo.listManga({
         status,
         title_query: title,
+        domain,
+        sort_by,
+        sort_order,
         page,
         page_size,
       });
@@ -96,12 +103,12 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'Get manga details and failed tasks',
+      security: [{ apiKey: [] }],
       params: mangaIdParamSchema,
       response: {
         200: z.object({
           success: z.literal(true),
-          data: z.object({
-            manga: mangaResponseSchema,
+          data: mangaResponseSchema.extend({
             failed_tasks: z.array(z.object({
               id: z.string(),
               chapter_url: z.string(),
@@ -111,7 +118,9 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
             })),
           }),
         }),
+        401: unauthorizedResponseSchema,
         404: z.object({ success: z.literal(false), error: z.string() }),
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (request, reply) => {
@@ -123,7 +132,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       return {
         success: true as const,
         data: {
-          manga,
+          ...manga,
           failed_tasks: failedTasks.map((t) => ({
             id: t.id,
             chapter_url: t.chapter_url,
@@ -143,11 +152,14 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'Update manga settings (interval, enabled, priority)',
+      security: [{ apiKey: [] }],
       params: mangaIdParamSchema,
       body: updateMangaSchema,
       response: {
         200: z.object({ success: z.literal(true), data: mangaResponseSchema }),
+        401: unauthorizedResponseSchema,
         404: z.object({ success: z.literal(false), error: z.string() }),
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (request, reply) => {
@@ -156,13 +168,8 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
 
-      // Publish realtime event (non-blocking)
-      publishMangaEvent(updated.manga_id, 'manga.updated', {
-        id: updated.id,
-        series_title: updated.series_title,
-        status: updated.status,
-        auto_sync_enabled: updated.auto_sync_enabled,
-      }).catch(() => {});
+      // Publish realtime event with enriched payload (non-blocking)
+      publishMangaEvent(updated.manga_id, 'manga.updated', toRealtimePayload(updated)).catch(() => {});
 
       return { success: true as const, data: updated };
     },
@@ -175,10 +182,13 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'Remove manga from registry (cancels active sync)',
+      security: [{ apiKey: [] }],
       params: mangaIdParamSchema,
       response: {
-        200: z.object({ success: z.literal(true), message: z.string() }),
+        200: z.object({ success: z.literal(true), message: z.string(), data: z.object({}) }),
+        401: unauthorizedResponseSchema,
         404: z.object({ success: z.literal(false), error: z.string() }),
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (request, reply) => {
@@ -193,13 +203,13 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
 
-      // Publish realtime event (non-blocking)
+      // Publish realtime event (minimal payload for deletion)
       publishMangaEvent(manga.manga_id, 'manga.deleted', {
         id: manga.id,
-        series_title: manga.series_title,
+        manga_id: manga.manga_id,
       }).catch(() => {});
 
-      return { success: true as const, message: 'Manga removed from registry' };
+      return { success: true as const, message: 'Manga deleted successfully', data: {} };
     },
   });
 
@@ -210,10 +220,17 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'Trigger an immediate scan for this manga',
+      security: [{ apiKey: [] }],
       params: mangaIdParamSchema,
       response: {
-        200: z.object({ success: z.literal(true), message: z.string() }),
+        200: z.object({
+          success: z.literal(true),
+          message: z.string(),
+          data: z.object({ status: z.string() }),
+        }),
+        401: unauthorizedResponseSchema,
         404: z.object({ success: z.literal(false), error: z.string() }),
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (request, reply) => {
@@ -222,7 +239,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.code(404).send({ success: false, error: 'Manga not found' });
       }
       await mangaRepo.triggerForceScan(manga.id);
-      return { success: true as const, message: 'Scan triggered' };
+      return { success: true as const, message: 'Scan initiated', data: { status: 'scanning' } };
     },
   });
 
@@ -233,15 +250,18 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'Retry failed sync tasks for this manga',
+      security: [{ apiKey: [] }],
       params: mangaIdParamSchema,
       response: {
         200: z.object({
           success: z.literal(true),
           message: z.string(),
-          data: z.object({ retried_count: z.number() }),
+          data: z.object({ retrying: z.number(), status: z.string() }),
         }),
         400: z.object({ success: z.literal(false), error: z.string() }),
+        401: unauthorizedResponseSchema,
         404: z.object({ success: z.literal(false), error: z.string() }),
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (request, reply) => {
@@ -258,7 +278,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
       return {
         success: true as const,
         message: `Retrying ${retriedCount} failed task(s)`,
-        data: { retried_count: retriedCount },
+        data: { retrying: retriedCount, status: 'syncing' },
       };
     },
   });
@@ -270,6 +290,7 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'Register multiple manga for auto-sync',
+      security: [{ apiKey: [] }],
       body: bulkCreateMangaSchema,
       response: {
         201: z.object({
@@ -283,6 +304,8 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
             })),
           }),
         }),
+        401: unauthorizedResponseSchema,
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (_request, reply) => {
@@ -321,12 +344,15 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['manga'],
       description: 'Bulk domain migration for all manga',
+      security: [{ apiKey: [] }],
       body: updateDomainSchema,
       response: {
         200: z.object({
           success: z.literal(true),
           data: z.object({ updated: z.number() }),
         }),
+        401: unauthorizedResponseSchema,
+        500: internalErrorResponseSchema,
       },
     },
     handler: async (request) => {
@@ -335,6 +361,36 @@ export const mangaRoutes: FastifyPluginAsync = async (fastify) => {
         success: true as const,
         data: { updated },
       };
+    },
+  });
+
+  // GET /manga/domains - List all source domains with manga counts by status
+  app.route({
+    method: 'GET',
+    url: '/domains',
+    schema: {
+      tags: ['manga'],
+      description: 'List all source domains with aggregated manga counts by status',
+      security: [{ apiKey: [] }],
+      response: {
+        200: z.object({
+          success: z.literal(true),
+          data: z.array(z.object({
+            domain: z.string(),
+            total: z.number(),
+            idle: z.number(),
+            scanning: z.number(),
+            syncing: z.number(),
+            error: z.number(),
+          })),
+        }),
+        401: unauthorizedResponseSchema,
+        500: internalErrorResponseSchema,
+      },
+    },
+    handler: async () => {
+      const domainStats = await mangaRepo.getDomainStats();
+      return { success: true as const, data: domainStats };
     },
   });
 };

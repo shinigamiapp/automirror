@@ -4,7 +4,7 @@ export const createMangaSchema = z.object({
   manga_id: z.string().min(1),
   manga_url: z.string().url(),
   series_title: z.string().min(1),
-  check_interval_minutes: z.number().int().min(1).default(20),
+  check_interval_minutes: z.number().int().min(1).default(360),
   priority: z.number().int().min(0).default(0),
   auto_sync_enabled: z.boolean().default(true),
 });
@@ -22,10 +22,16 @@ export const mangaIdParamSchema = z.object({
 });
 
 export const listMangaQuerySchema = z.object({
-  status: z.enum(['idle', 'scanning', 'syncing', 'error']).optional(),
+  status: z.enum(['idle', 'scanning', 'syncing', 'error', 'active']).optional(),
   title: z.string().min(1).optional(),
+  domain: z.string().min(1).optional(),
+  sort_by: z.enum(['created_at', 'updated_at', 'series_title', 'priority']).optional(),
+  sort_order: z.enum(['asc', 'desc']).optional(),
   page: z.coerce.number().int().min(1).default(1),
-  page_size: z.coerce.number().int().min(1).max(100).default(20),
+  page_size: z.coerce.number().int().refine(
+    (v) => v === -1 || (v >= 1 && v <= 100),
+    { message: 'page_size must be between 1 and 100, or -1 to return all records' },
+  ).default(20),
 });
 
 export const mangaResponseSchema = z.object({
@@ -46,14 +52,14 @@ export const mangaResponseSchema = z.object({
   sync_progress_total: z.number(),
   sync_progress_completed: z.number(),
   sync_progress_failed: z.number(),
-  last_scanned_at: z.string().datetime().nullable(),
-  last_synced_at: z.string().datetime().nullable(),
-  next_scan_at: z.string().datetime().nullable(),
+  last_scanned_at: z.string().nullable(),
+  last_synced_at: z.string().nullable(),
+  next_scan_at: z.string().nullable(),
   last_error: z.string().nullable(),
-  last_error_at: z.string().datetime().nullable(),
+  last_error_at: z.string().nullable(),
   consecutive_failures: z.number(),
-  created_at: z.string().datetime(),
-  updated_at: z.string().datetime(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
 export const bulkCreateMangaSchema = z.object({
@@ -63,4 +69,14 @@ export const bulkCreateMangaSchema = z.object({
 export const updateDomainSchema = z.object({
   old_domain: z.string().min(1),
   new_domain: z.string().min(1),
+});
+
+export const unauthorizedResponseSchema = z.object({
+  success: z.literal(false),
+  error: z.literal('Invalid or missing X-API-KEY header'),
+});
+
+export const internalErrorResponseSchema = z.object({
+  success: z.literal(false),
+  error: z.string(),
 });

@@ -23,6 +23,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
             tokenRequest: z.any(),
           }),
         }),
+        500: z.object({
+          success: z.literal(false),
+          error: z.string(),
+        }),
         503: z.object({
           success: z.literal(false),
           error: z.string(),
@@ -63,6 +67,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
       response: {
         200: z.object({
           configured: z.boolean(),
+        }),
+        500: z.object({
+          success: z.literal(false),
+          error: z.string(),
         }),
       },
     },

@@ -58,6 +58,7 @@ export async function buildApp() {
       tags: [
         { name: 'manga', description: 'Manga registry and auto-sync' },
         { name: 'realtime', description: 'Ably realtime authentication' },
+        { name: 'webhooks', description: 'Webhook endpoints' },
         { name: 'health', description: 'Health and status' },
       ],
       components: {
@@ -73,9 +74,9 @@ export async function buildApp() {
     transform: jsonSchemaTransform,
   });
 
-  // Scalar API Reference (replaces Swagger UI)
+  // Scalar API Reference
   await app.register(scalarReference, {
-    routePrefix: '/reference',
+    routePrefix: '/docs',
   });
 
   // Register route plugins

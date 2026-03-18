@@ -10,9 +10,11 @@ export const webhooksRoutes: FastifyPluginAsync = async (fastify) => {
     method: 'POST',
     url: '/ping',
     schema: {
+      tags: ['webhooks'],
       description: 'Webhook ping/health check',
       response: {
         200: z.object({ success: z.literal(true) }),
+        500: z.object({ success: z.literal(false), error: z.string() }),
       },
     },
     handler: async () => {

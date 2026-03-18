@@ -1,5 +1,6 @@
 import Ably from 'ably';
 import { CONFIG } from '../config.js';
+import type { MangaRegistry } from '../types.js';
 
 // Lazy-initialized Ably client
 let ablyClient: Ably.Rest | null = null;
@@ -89,6 +90,34 @@ export async function publishMangaEvent(
     publishToList(event, { ...data, manga_id: mangaId }),
     publishToDetail(mangaId, event, data),
   ]);
+}
+
+/**
+ * Convert a MangaRegistry to a realtime payload with all list-relevant fields.
+ * This ensures consistent, enriched payloads across all events.
+ */
+export function toRealtimePayload(manga: MangaRegistry): Record<string, unknown> {
+  return {
+    id: manga.id,
+    manga_id: manga.manga_id,
+    series_title: manga.series_title,
+    source_domain: manga.source_domain,
+    status: manga.status,
+    auto_sync_enabled: manga.auto_sync_enabled,
+    source_chapter_count: manga.source_chapter_count,
+    source_last_chapter: manga.source_last_chapter,
+    backend_chapter_count: manga.backend_chapter_count,
+    backend_last_chapter: manga.backend_last_chapter,
+    sync_progress_total: manga.sync_progress_total,
+    sync_progress_completed: manga.sync_progress_completed,
+    sync_progress_failed: manga.sync_progress_failed,
+    last_scanned_at: manga.last_scanned_at,
+    last_synced_at: manga.last_synced_at,
+    next_scan_at: manga.next_scan_at,
+    last_error: manga.last_error,
+    consecutive_failures: manga.consecutive_failures,
+    updated_at: manga.updated_at,
+  };
 }
 
 /**

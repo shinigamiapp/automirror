@@ -5,7 +5,9 @@ async function createIndexIfNotExists(pool: Pool, sql: string): Promise<void> {
     await pool.execute(sql);
   } catch (error: unknown) {
     const mysqlError = error as { code?: string; errno?: number };
-    if (mysqlError.code === 'ER_DUP_KEYNAME' || mysqlError.errno === 1061) return;
+    if (mysqlError.code === 'ER_DUP_KEYNAME' || mysqlError.errno === 1061) {
+      return;
+    }
     throw error;
   }
 }
@@ -49,20 +51,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ) ENGINE=InnoDB
   `);
 
-  await createIndexIfNotExists(pool, `
-    CREATE INDEX idx_manga_registry_domain_slug
-      ON manga_registry(source_domain, manga_slug)
-  `);
+  await createIndexIfNotExists(
+    pool,
+    `CREATE INDEX idx_manga_registry_domain_slug ON manga_registry(source_domain, manga_slug)`
+  );
 
-  await createIndexIfNotExists(pool, `
-    CREATE INDEX idx_manga_registry_scan
-      ON manga_registry(auto_sync_enabled, next_scan_at)
-  `);
+  await createIndexIfNotExists(
+    pool,
+    `CREATE INDEX idx_manga_registry_scan ON manga_registry(auto_sync_enabled, next_scan_at)`
+  );
 
-  await createIndexIfNotExists(pool, `
-    CREATE INDEX idx_manga_registry_status
-      ON manga_registry(status)
-  `);
+  await createIndexIfNotExists(pool, `CREATE INDEX idx_manga_registry_status ON manga_registry(status)`);
 
   // Manga Sync Tasks (Internal - Not Exposed via API)
   await pool.execute(`
@@ -86,15 +85,12 @@ export async function runMigrations(pool: Pool): Promise<void> {
     ) ENGINE=InnoDB
   `);
 
-  await createIndexIfNotExists(pool, `
-    CREATE INDEX idx_sync_tasks_manga
-      ON manga_sync_tasks(manga_registry_id)
-  `);
+  await createIndexIfNotExists(pool, `CREATE INDEX idx_sync_tasks_manga ON manga_sync_tasks(manga_registry_id)`);
 
-  await createIndexIfNotExists(pool, `
-    CREATE INDEX idx_sync_tasks_status
-      ON manga_sync_tasks(manga_registry_id, status, weight)
-  `);
+  await createIndexIfNotExists(
+    pool,
+    `CREATE INDEX idx_sync_tasks_status ON manga_sync_tasks(manga_registry_id, status, weight)`
+  );
 
   // Source Domains (Per-Domain Rate Limits)
   await pool.execute(`

@@ -5,7 +5,7 @@ import * as scraperService from '../services/scraper.js';
 import * as uploaderService from '../services/uploader.js';
 import * as backendService from '../services/backend.js';
 import { debouncedCachePurge } from '../services/cache.js';
-import { publishMangaEvent } from '../services/realtime.js';
+import { publishMangaEvent, toRealtimePayload } from '../services/realtime.js';
 import type { MangaRegistry, MangaSyncTask } from '../types.js';
 
 /**
@@ -80,8 +80,8 @@ async function processTask(
         chapter_title: '',
         chapter_images: uploaderResult.results.data,
         path: uploaderResult.results.path,
-        release_date: new Date().toISOString(),
         thumbnail_image_url: CONFIG.DEFAULT_THUMBNAIL_URL,
+        release_date: new Date().toISOString(),
       },
     ]);
 
@@ -92,11 +92,14 @@ async function processTask(
     await mangaRepo.updateMangaSyncProgress(manga.id);
     debouncedCachePurge(manga.manga_id);
 
-    // Publish sync progress event (non-blocking)
-    publishMangaEvent(manga.manga_id, 'manga.sync.progress', {
-      id: manga.id,
-      chapter_number: task.chapter_number,
-      status: 'completed',
+    // Publish sync progress event with enriched payload (non-blocking)
+    mangaRepo.getMangaById(manga.id).then((updated) => {
+      if (updated) {
+        publishMangaEvent(manga.manga_id, 'manga.sync.progress', {
+          ...toRealtimePayload(updated),
+          chapter_number: task.chapter_number,
+        });
+      }
     }).catch(() => {});
 
     taskLog.info('Chapter synced successfully');
@@ -107,12 +110,15 @@ async function processTask(
     await mangaRepo.updateSyncTaskStatus(task.id, 'failed', { error: errMsg });
     await mangaRepo.updateMangaSyncProgress(manga.id);
 
-    // Publish sync progress event (non-blocking)
-    publishMangaEvent(manga.manga_id, 'manga.sync.progress', {
-      id: manga.id,
-      chapter_number: task.chapter_number,
-      status: 'failed',
-      error: errMsg,
+    // Publish sync progress event with enriched payload (non-blocking)
+    mangaRepo.getMangaById(manga.id).then((updated) => {
+      if (updated) {
+        publishMangaEvent(manga.manga_id, 'manga.sync.progress', {
+          ...toRealtimePayload(updated),
+          chapter_number: task.chapter_number,
+          error: errMsg,
+        });
+      }
     }).catch(() => {});
   }
 }

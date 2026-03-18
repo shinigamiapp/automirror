@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { getDatabase } from '../index.js';
-import type { MangaRegistry, MangaSyncTask } from '../../types.js';
+import type { MangaRegistry, MangaSyncTask, SourceDomain } from '../../types.js';
 
 function toMySQLDatetime(isoString: string): string {
   return new Date(isoString).toISOString().slice(0, 19).replace('T', ' ');
@@ -93,13 +93,17 @@ export async function getMangaByMangaId(mangaId: string): Promise<MangaRegistry 
 export async function listManga(options: {
   status?: string;
   title_query?: string;
+  domain?: string;
+  sort_by?: string;
+  sort_order?: string;
   page: number;
   page_size: number;
 }): Promise<{ manga: MangaRegistry[]; total: number }> {
   const db = getDatabase();
-  const { status, title_query, page, page_size } = options;
+  const { status, title_query, domain, sort_by, sort_order, page, page_size } = options;
+  const fetchAll = page_size === -1;
   const normalizedPage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
-  const normalizedPageSize = Number.isFinite(page_size) && page_size > 0
+  const normalizedPageSize = !fetchAll && Number.isFinite(page_size) && page_size > 0
     ? Math.min(Math.floor(page_size), 100)
     : 20;
   const offset = (normalizedPage - 1) * normalizedPageSize;
@@ -108,8 +112,12 @@ export async function listManga(options: {
   const params: (string | number)[] = [];
 
   if (status) {
-    whereClauses.push('status = ?');
-    params.push(status);
+    if (status === 'active') {
+      whereClauses.push("status IN ('scanning', 'syncing')");
+    } else {
+      whereClauses.push('status = ?');
+      params.push(status);
+    }
   }
 
   if (title_query && title_query.trim().length > 0) {
@@ -117,9 +125,21 @@ export async function listManga(options: {
     params.push(`%${title_query.trim()}%`);
   }
 
+  if (domain && domain.trim().length > 0) {
+    whereClauses.push('source_domain = ?');
+    params.push(domain.trim());
+  }
+
   const whereClause = whereClauses.length > 0
     ? `WHERE ${whereClauses.join(' AND ')}`
     : '';
+
+  const allowedSortColumns = ['created_at', 'updated_at', 'series_title', 'priority'];
+  const sortColumn = sort_by && allowedSortColumns.includes(sort_by) ? sort_by : 'priority';
+  const sortDirection = sort_order === 'asc' ? 'ASC' : 'DESC';
+  const orderClause = sortColumn === 'priority'
+    ? `ORDER BY priority ${sortDirection}, created_at DESC`
+    : `ORDER BY ${sortColumn} ${sortDirection}`;
 
   const [countRows] = await db.execute<RowDataPacket[]>(
     `SELECT COUNT(*) as count FROM manga_registry ${whereClause}`,
@@ -127,10 +147,11 @@ export async function listManga(options: {
   );
   const total = Number(countRows[0].count);
 
-  const [rows] = await db.execute<RowDataPacket[]>(
-    `SELECT * FROM manga_registry ${whereClause} ORDER BY priority DESC, created_at DESC LIMIT ${normalizedPageSize} OFFSET ${offset}`,
-    params,
-  );
+  const dataQuery = fetchAll
+    ? `SELECT * FROM manga_registry ${whereClause} ${orderClause}`
+    : `SELECT * FROM manga_registry ${whereClause} ${orderClause} LIMIT ${normalizedPageSize} OFFSET ${offset}`;
+
+  const [rows] = await db.execute<RowDataPacket[]>(dataQuery, params);
 
   return { manga: rows.map((r: RowDataPacket) => mapMangaRow(r)), total };
 }
@@ -223,6 +244,8 @@ export async function updateMangaScanResult(
   },
 ): Promise<void> {
   const db = getDatabase();
+  // Only reset status to 'idle' if currently in 'scanning' — never override 'syncing'
+  // to avoid a race where a re-scan clears the syncing state before tasks complete.
   await db.execute(
     `UPDATE manga_registry
      SET source_chapter_count = ?, source_last_chapter = ?,
@@ -309,6 +332,7 @@ export async function getPendingSyncTasks(
   limit: number,
 ): Promise<MangaSyncTask[]> {
   const db = getDatabase();
+  // Note: LIMIT cannot be parameterized in mysql2 prepared statements
   const [rows] = await db.execute<RowDataPacket[]>(
     `SELECT * FROM manga_sync_tasks
      WHERE manga_registry_id = ? AND status = 'pending'
@@ -439,7 +463,11 @@ export async function updateBackendChapterStats(
 ): Promise<void> {
   const db = getDatabase();
   await db.execute(
-    `UPDATE manga_registry SET backend_chapter_count = ?, backend_last_chapter = ?, updated_at = NOW() WHERE id = ?`,
+    `UPDATE manga_registry
+     SET backend_chapter_count = ?,
+         backend_last_chapter = ?,
+         updated_at = NOW()
+     WHERE id = ?`,
     [data.backend_chapter_count, data.backend_last_chapter, id],
   );
 }
@@ -459,20 +487,86 @@ export async function incrementBackendChapterStats(
   );
 }
 
+/**
+ * Resolve manga stuck in 'syncing' state whose tasks have all finished.
+ * This handles the edge case where all tasks complete but the manga status
+ * never transitioned back because getMangaWithActiveTasks excluded it.
+ */
 export async function resolveCompletedSyncingManga(): Promise<number> {
   const db = getDatabase();
+
+  // Flip to 'error' if any failed tasks remain, otherwise 'idle'
   const [errorResult] = await db.execute<ResultSetHeader>(
     `UPDATE manga_registry
-     SET status = 'error', last_error = 'Some chapters failed to sync', updated_at = NOW()
+     SET status = 'error',
+         last_error = 'Some chapters failed to sync',
+         updated_at = NOW()
      WHERE status = 'syncing'
-       AND NOT EXISTS (SELECT 1 FROM manga_sync_tasks WHERE manga_registry_id = manga_registry.id AND status IN ('pending', 'scraping', 'scraped', 'uploading'))
-       AND EXISTS (SELECT 1 FROM manga_sync_tasks WHERE manga_registry_id = manga_registry.id AND status = 'failed')`,
+       AND NOT EXISTS (
+         SELECT 1 FROM manga_sync_tasks
+         WHERE manga_registry_id = manga_registry.id
+           AND status IN ('pending', 'scraping', 'scraped', 'uploading')
+       )
+       AND EXISTS (
+         SELECT 1 FROM manga_sync_tasks
+         WHERE manga_registry_id = manga_registry.id
+           AND status = 'failed'
+       )`,
   );
+
   const [idleResult] = await db.execute<ResultSetHeader>(
     `UPDATE manga_registry
-     SET status = 'idle', last_synced_at = COALESCE(last_synced_at, NOW()), updated_at = NOW()
+     SET status = 'idle',
+         last_synced_at = COALESCE(last_synced_at, NOW()),
+         updated_at = NOW()
      WHERE status = 'syncing'
-       AND NOT EXISTS (SELECT 1 FROM manga_sync_tasks WHERE manga_registry_id = manga_registry.id AND status IN ('pending', 'scraping', 'scraped', 'uploading', 'failed'))`,
+       AND NOT EXISTS (
+         SELECT 1 FROM manga_sync_tasks
+         WHERE manga_registry_id = manga_registry.id
+           AND status IN ('pending', 'scraping', 'scraped', 'uploading', 'failed')
+       )`,
   );
+
   return errorResult.affectedRows + idleResult.affectedRows;
+}
+
+export async function getDomains(): Promise<SourceDomain[]> {
+  const db = getDatabase();
+  const [rows] = await db.execute<RowDataPacket[]>(
+    'SELECT * FROM source_domains ORDER BY domain ASC',
+  );
+  return rows as SourceDomain[];
+}
+
+export interface DomainStats {
+  domain: string;
+  total: number;
+  idle: number;
+  scanning: number;
+  syncing: number;
+  error: number;
+}
+
+export async function getDomainStats(): Promise<DomainStats[]> {
+  const db = getDatabase();
+  const [rows] = await db.execute<RowDataPacket[]>(`
+    SELECT
+      source_domain AS domain,
+      COUNT(*) AS total,
+      SUM(CASE WHEN status = 'idle' THEN 1 ELSE 0 END) AS idle,
+      SUM(CASE WHEN status = 'scanning' THEN 1 ELSE 0 END) AS scanning,
+      SUM(CASE WHEN status = 'syncing' THEN 1 ELSE 0 END) AS syncing,
+      SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error
+    FROM manga_registry
+    GROUP BY source_domain
+    ORDER BY source_domain ASC
+  `);
+  return rows.map((row) => ({
+    domain: row.domain,
+    total: Number(row.total),
+    idle: Number(row.idle),
+    scanning: Number(row.scanning),
+    syncing: Number(row.syncing),
+    error: Number(row.error),
+  }));
 }
